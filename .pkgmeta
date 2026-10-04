@@ -2,3 +2,6 @@ package-as: VocGear
 
 ignore:
   - .github
+  - tests
+  - AGENTS.md
+  - VERSIONING.md
