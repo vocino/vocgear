@@ -4,18 +4,18 @@ local name, ns = ...
 VocGearDB = VocGearDB or {}
 ns.db = VocGearDB
 
--- Defaults. minUpgradePct is a percent; Pawn's own bar is 0.5.
+-- Defaults. minUpgradePct is a percent in 5s; 0 accepts every Pawn
+-- verdict (Pawn's own ~0.5% bar still applies upstream).
 -- scale "" means any visible Pawn scale.
 local defaults = {
   enabled = true,
   announce = true,
   audit = false,
-  minUpgradePct = 0.5,
+  minUpgradePct = 0,
   autoTwoSlot = false,
   includeIlvl = true,
+  keepHeirlooms = true,
   scale = "",
-  questPicker = "highlight", -- "off" | "highlight" | "auto"
-  lootAdvisor = true,
 }
 ns.defaults = defaults
 
@@ -72,13 +72,22 @@ function ns.evaluate(link)
   end
   if not result.upgrade and o.includeIlvl then
     local okIlvl, diff = pcall(_G.PawnIsItemAnItemLevelUpgrade, item)
-    if okIlvl and diff then
+    if okIlvl and diff and ns.armorBest(item) then
       result.upgrade = true
       result.ilvl = true
       result.ilvlDiff = diff
     end
   end
   return result
+end
+
+-- Armor-type gate. Pawn applies PawnIsArmorBestTypeForPlayer to score
+-- upgrades itself (Pawn.lua:3621); the item-level path has no such check,
+-- so mirror it here. A missing API (older Pawn) fails open.
+function ns.armorBest(item)
+  if type(_G.PawnIsArmorBestTypeForPlayer) ~= "function" then return true end
+  local ok, best = pcall(_G.PawnIsArmorBestTypeForPlayer, item)
+  return ok and best
 end
 
 function ns.unenchant(link)
@@ -91,6 +100,33 @@ end
 
 -- Inventory slot pairs, mirroring Pawn's PawnItemEquipLocToSlot tables.
 ns.slotPairs = { INVTYPE_FINGER = { 11, 12 }, INVTYPE_TRINKET = { 13, 14 } }
+
+-- Primary slot per equip loc, same source. Used to see what an equip
+-- would displace (for two-slot items the resolved slot is used instead).
+ns.primarySlot = {
+  INVTYPE_HEAD = 1, INVTYPE_NECK = 2, INVTYPE_SHOULDER = 3, INVTYPE_BODY = 4,
+  INVTYPE_CHEST = 5, INVTYPE_ROBE = 5, INVTYPE_WAIST = 6, INVTYPE_LEGS = 7,
+  INVTYPE_FEET = 8, INVTYPE_WRIST = 9, INVTYPE_HAND = 10, INVTYPE_FINGER = 11,
+  INVTYPE_TRINKET = 13, INVTYPE_CLOAK = 15, INVTYPE_WEAPON = 16,
+  INVTYPE_SHIELD = 17, INVTYPE_2HWEAPON = 16, INVTYPE_WEAPONMAINHAND = 16,
+  INVTYPE_RANGED = 16, INVTYPE_RANGEDRIGHT = 16, INVTYPE_WEAPONOFFHAND = 17,
+  INVTYPE_HOLDABLE = 17, INVTYPE_TABARD = 19,
+}
+
+ns.HEIRLOOM_RARITY = 7
+function ns.isHeirloom(link)
+  if not link then return false end
+  local _, _, rarity = C_Item.GetItemInfo(link)
+  return rarity == ns.HEIRLOOM_RARITY
+end
+
+function ns.announceHeirloom(link, held)
+  local o = ns.opts()
+  if o.announce and not ns.flagged[link] then
+    ns.flagged[link] = true
+    print("VocGear: keeping heirloom " .. held .. " (" .. link .. " is an upgrade)")
+  end
+end
 
 -- Which slot should a two-slot upgrade go into? Prefers the slot holding
 -- the item Pawn says it replaces; falls back to the empty or weaker slot.
@@ -146,13 +182,16 @@ end
 -- Returns true when an equip happened (scan should stop for this pass).
 function ns.equip(link, ev, slotID)
   local o = ns.opts()
-  if o.audit then
+  local paused = ns.isPaused()
+  if o.audit or paused then
     if o.announce and not ns.flagged[link] then
       ns.flagged[link] = true
-      print("VocGear: would equip " .. link .. ns.why(ev) .. " (audit mode)")
+      local reason = paused and " (paused: loop guard)" or " (audit mode)"
+      print("VocGear: would equip " .. link .. ns.why(ev) .. reason)
     end
     return false
   end
+  ns.ourEquipPending = true
   if slotID then EquipItemByName(link, slotID) else EquipItemByName(link) end
   if o.announce then print("VocGear: equipped " .. link .. ns.why(ev)) end
   return true
@@ -160,6 +199,73 @@ end
 
 ns.flagged = {} -- links announced as not-auto-equipped, per session
 ns.scanning = false
+
+-- Loop guard: gear just swapped out is left alone for a while, so A->B->A
+-- ping-pong (multi-scale verdicts, weapon-slot ambiguity, stale Pawn data
+-- right after an equip) can't run forever.
+ns.SWAP_COOLDOWN = 30 -- seconds a displaced link is skipped
+ns.BREAKER_WINDOW = 60 -- sliding window for same-slot re-equips
+ns.BREAKER_TRIPS = 3 -- our equips to one slot in-window that pause auto-equip
+ns.BREAKER_PAUSE = 60 -- pause length in seconds
+ns.equippedSnap = nil -- slotID -> link at the last scan's start
+ns.recentSwap = {} -- link -> timestamp when it was displaced
+ns.slotTouches = {} -- slotID -> timestamps of OUR equips
+ns.pausedUntil = nil
+ns.ourEquipPending = false
+
+function ns.snapshotEquipped()
+  local snap = {}
+  for slotID = 1, 19 do
+    snap[slotID] = GetInventoryItemLink("player", slotID)
+  end
+  return snap
+end
+
+function ns.noteDisplacement(prevLink, newLink, slotID, now)
+  -- Any observed displacement (ours or the player's) seeds swap memory:
+  -- don't yank back what just came off, including the player's own swaps.
+  if prevLink then ns.recentSwap[prevLink] = now end
+  if newLink and ns.ourEquipPending then
+    local fresh = {}
+    for _, t in ipairs(ns.slotTouches[slotID] or {}) do
+      if now - t < ns.BREAKER_WINDOW then fresh[#fresh + 1] = t end
+    end
+    fresh[#fresh + 1] = now
+    ns.slotTouches[slotID] = fresh
+    if #fresh >= ns.BREAKER_TRIPS then
+      ns.pausedUntil = now + ns.BREAKER_PAUSE
+      if ns.opts().announce then
+        print("VocGear: equip loop detected, auto-equip paused 60s (/vg twice to resume now)")
+      end
+    end
+  end
+end
+
+function ns.trackSwaps()
+  local now = GetTime()
+  local snap = ns.snapshotEquipped()
+  if ns.equippedSnap then
+    for slotID = 1, 19 do
+      local prev, cur = ns.equippedSnap[slotID], snap[slotID]
+      if cur ~= prev then ns.noteDisplacement(prev, cur, slotID, now) end
+    end
+  end
+  ns.equippedSnap = snap
+  ns.ourEquipPending = false
+  for link, t in pairs(ns.recentSwap) do
+    if now - t >= ns.SWAP_COOLDOWN then ns.recentSwap[link] = nil end
+  end
+end
+
+function ns.isPaused()
+  return ns.pausedUntil ~= nil and GetTime() < ns.pausedUntil
+end
+
+function ns.clearGuard()
+  ns.pausedUntil = nil
+  ns.slotTouches = {}
+  ns.recentSwap = {}
+end
 
 -- Pawn may load after us or init late; one outstanding retry covers the race
 -- without stacking a new timer on every bag event.
@@ -178,6 +284,7 @@ function ns.scan()
   if not o.enabled then return end
   if not ns.pawnReady() then ns.retrySoon() return end
   if InCombatLockdown() then return end
+  ns.trackSwaps()
   ns.scanning = true
   local unsure = false
   for bag = 0, NUM_BAG_SLOTS do
@@ -187,20 +294,28 @@ function ns.scan()
         local ev = ns.evaluate(link)
         if ev == nil then
           unsure = true
-        elseif ev.upgrade then
+        -- Freshly displaced gear is left alone (loop guard), silently.
+        elseif ev.upgrade and not ns.recentSwap[link] then
           local _, _, _, equipLoc = C_Item.GetItemInfoInstant(link)
           local pair = equipLoc and ns.slotPairs[equipLoc]
           if equipLoc == nil or (pair and not o.autoTwoSlot) then
             ns.announce(link, ev)
           elseif pair then
             local slotID = ns.resolveTwoSlotSlot(equipLoc, ev, link)
-            if slotID then
+            local held = slotID and GetInventoryItemLink("player", slotID)
+            if slotID and o.keepHeirlooms and ns.isHeirloom(held) then
+              ns.announceHeirloom(link, held)
+            elseif slotID then
               if ns.equip(link, ev, slotID) then ns.scanning = false return end
             else
               ns.announce(link, ev)
             end
           else
-            if ns.equip(link, ev, nil) then ns.scanning = false return end
+            local slot = equipLoc and ns.primarySlot[equipLoc]
+            local held = slot and GetInventoryItemLink("player", slot)
+            if o.keepHeirlooms and ns.isHeirloom(held) then
+              ns.announceHeirloom(link, held)
+            elseif ns.equip(link, ev, nil) then ns.scanning = false return end
           end
         end
       end
@@ -210,57 +325,6 @@ function ns.scan()
   -- One equip per scan; the bag update re-triggers for the rest. Items Pawn
   -- couldn't answer yet get a retry so they aren't skipped forever.
   if unsure then ns.retrySoon() end
-end
-
--- Quest-reward picker. Runs when the quest-complete dialog shows; picks the
--- best Pawn upgrade among the choices, or just names it.
-function ns.questChoices()
-  if not ns.pawnReady() then return end
-  local o = ns.opts()
-  local mode = o.questPicker
-  if not mode or mode == "off" then return end
-  local n = GetNumQuestChoices()
-  if not n or n < 2 then return end -- nothing to decide
-  local best, bestEv, bestIndex
-  for i = 1, n do
-    local link = GetQuestItemLink("choice", i)
-    if link then
-      local ev = ns.evaluate(link)
-      if ev and ev.upgrade and (not bestEv or (ev.percent or 0) > (bestEv.percent or 0)) then
-        best, bestEv, bestIndex = link, ev, i
-      end
-    end
-  end
-  if mode == "auto" and not o.audit then
-    if bestIndex then
-      GetQuestReward(bestIndex)
-      if o.announce then print("VocGear: quest reward taken: " .. best .. ns.why(bestEv)) end
-    elseif o.announce then
-      print("VocGear: no quest reward is a Pawn upgrade; left for you to pick")
-    end
-  elseif o.announce then
-    if bestIndex then
-      print("VocGear: quest reward pick: take " .. best .. ns.why(bestEv))
-    else
-      print("VocGear: no quest reward is a Pawn upgrade")
-    end
-  end
-end
-
--- Loot roll advisor. Advisory only: never rolls, just informs.
-function ns.lootRoll(rollID)
-  if not ns.opts().lootAdvisor then return end
-  if not ns.pawnReady() then return end
-  local link = GetLootRollItemLink(rollID)
-  if not link then return end
-  local ev = ns.evaluate(link)
-  if not ev then return end -- unsure; stay quiet rather than mislead
-  if not ns.opts().announce then return end
-  if ev.upgrade then
-    print("VocGear: NEED " .. link .. ns.why(ev))
-  else
-    print("VocGear: GREED " .. link .. " (not a Pawn upgrade)")
-  end
 end
 
 -- Blizzard Settings panel (Settings > AddOns > VocGear). Built once, after
@@ -285,14 +349,22 @@ function ns.ensureSettings()
     local s = Settings.RegisterAddOnSetting(
       category, "VocGear_minUpgradePct", "minUpgradePct",
       db, type(defaults.minUpgradePct), "Minimum upgrade %", defaults.minUpgradePct)
-    local sliderOpts = Settings.CreateSliderOptions(0.5, 25, 0.5)
+    local sliderOpts = Settings.CreateSliderOptions(0, 25, 5)
+    -- Right-side value label, like the native sliders. Guarded: without
+    -- it the slider still works, just without the number.
+    local rightLabel = MinimalSliderWithSteppersMixin
+      and MinimalSliderWithSteppersMixin.Label
+      and MinimalSliderWithSteppersMixin.Label.Right
+    if rightLabel then sliderOpts:SetLabelFormatter(rightLabel) end
     Settings.CreateSlider(category, s, sliderOpts,
-      "Only act on upgrades at or above this Pawn margin. Pawn's own bar is 0.5%.")
+      "Only act on upgrades at or above this Pawn margin (0 = everything Pawn flags).")
   end
   check("autoTwoSlot", "Auto-equip rings and trinkets",
     "Equip into the weaker of the pair instead of announcing.")
   check("includeIlvl", "Include item-level upgrades",
     "Treat Pawn's item-level-only upgrades as upgrades too.")
+  check("keepHeirlooms", "Don't replace heirlooms",
+    "Keep equipped heirlooms even when something else scores higher.")
   do
     local s = Settings.RegisterAddOnSetting(
       category, "VocGear_scale", "scale",
@@ -300,14 +372,6 @@ function ns.ensureSettings()
     Settings.CreateDropdown(category, s, ns.scaleOptions,
       "Which Pawn scale counts. Any visible scale preserves stock behavior.")
   end
-  do
-    local s = Settings.RegisterAddOnSetting(
-      category, "VocGear_questPicker", "questPicker",
-      db, type(defaults.questPicker), "Quest rewards", defaults.questPicker)
-    Settings.CreateDropdown(category, s, ns.questOptions,
-      "Off: ignore. Highlight: print the pick. Auto: take the best choice.")
-  end
-  check("lootAdvisor", "Loot roll advisor", "Recommend NEED or GREED on group loot in chat.")
   ns.settingsBuilt = true
   ns.settingsCategory = category
 end
@@ -328,14 +392,6 @@ function ns.scaleOptions()
   return container:GetData()
 end
 
-function ns.questOptions()
-  local container = Settings.CreateControlTextContainer()
-  container:Add("off", "Off", "Never touch quest rewards.")
-  container:Add("highlight", "Highlight best", "Print which choice to take.")
-  container:Add("auto", "Auto-pick best", "Take the best choice for you.")
-  return container:GetData()
-end
-
 function ns.openConfig()
   local ok = pcall(function() Settings.OpenToCategory(ns.settingsCategory:GetID()) end)
   if not ok then print("VocGear: open Settings > AddOns > VocGear") end
@@ -346,20 +402,12 @@ ns.frame:RegisterEvent("ADDON_LOADED")
 ns.frame:RegisterEvent("BAG_UPDATE_DELAYED")
 ns.frame:RegisterEvent("PLAYER_ENTERING_WORLD")
 ns.frame:RegisterEvent("PLAYER_REGEN_ENABLED")
-ns.frame:RegisterEvent("QUEST_COMPLETE")
-ns.frame:RegisterEvent("START_LOOT_ROLL")
 ns.frame:SetScript("OnEvent", function(_, event, arg1)
   if event == "ADDON_LOADED" then
     -- The client replaces the SavedVariables global with the loaded table
     -- after our file ran, so rebind or settings never persist.
     if arg1 == name then ns.db = VocGearDB ns.ensureSettings() end
     if arg1 ~= "Pawn" and arg1 ~= name then return end
-  elseif event == "QUEST_COMPLETE" then
-    ns.questChoices()
-    return
-  elseif event == "START_LOOT_ROLL" then
-    ns.lootRoll(arg1)
-    return
   elseif event == "PLAYER_ENTERING_WORLD" then
     ns.ensureSettings() -- in case Settings wasn't up at ADDON_LOADED
   end
@@ -381,6 +429,6 @@ SlashCmdList.VOCGEAR = function(msg)
   else
     o.enabled = not o.enabled
     print("VocGear: " .. (o.enabled and "on" or "off"))
-    if o.enabled then ns.scan() end
+    if o.enabled then ns.clearGuard() ns.scan() end
   end
 end
