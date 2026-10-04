@@ -31,18 +31,35 @@ local function loadAddon(world)
   g.C_Item = {
     GetItemInfoInstant = function(link) return nil, nil, nil, world.slots[link] end,
     GetItemInfo = function(link)
-      return nil, nil, nil, nil, world.minLevels[link]
+      return nil, nil, world.rarities[link], nil, world.minLevels[link]
     end,
     GetDetailedItemLevelInfo = function(link) return world.levels[link] end,
   }
   g.UnitLevel = function() return world.playerLevel end
+  g.GetTime = function() return world.time end
   g.InCombatLockdown = function() return world.inCombat end
+  -- Game-chosen equip slot per equip loc, mirroring Pawn's slot table.
+  local equipLocSlot = { INVTYPE_HEAD = 1, INVTYPE_NECK = 2, INVTYPE_SHOULDER = 3,
+    INVTYPE_CHEST = 5, INVTYPE_WAIST = 6, INVTYPE_LEGS = 7, INVTYPE_FEET = 8,
+    INVTYPE_WRIST = 9, INVTYPE_HAND = 10, INVTYPE_CLOAK = 15, INVTYPE_WEAPON = 16,
+    INVTYPE_SHIELD = 17, INVTYPE_2HWEAPON = 16, INVTYPE_WEAPONMAINHAND = 16,
+    INVTYPE_WEAPONOFFHAND = 17, INVTYPE_HOLDABLE = 17, INVTYPE_RANGED = 16 }
   g.EquipItemByName = function(item, slot)
     world.equipped[#world.equipped + 1] = { item = item, slot = slot }
     -- Like the real client, the equipped item leaves the bags.
     for _, b in pairs(world.bags) do
       for i = #b, 1, -1 do
         if b[i] == item then table.remove(b, i) end
+      end
+    end
+    -- ...and the displaced item lands back in the bags.
+    local s = slot or equipLocSlot[world.slots[item]]
+    if s then
+      local prev = world.equippedSlots[s]
+      world.equippedSlots[s] = item
+      if prev then
+        world.bags[0] = world.bags[0] or {}
+        world.bags[0][#world.bags[0] + 1] = prev
       end
     end
   end
@@ -70,11 +87,12 @@ local function loadAddon(world)
     function() return world.scales end or nil
   g.PawnUnenchantItemLink = world.pawn and
     function(link) return link end or nil
-  -- Quest + loot stubs.
-  g.GetNumQuestChoices = function() return #world.questChoices end
-  g.GetQuestItemLink = function(_, i) return world.questChoices[i] end
-  g.GetQuestReward = function(i) world.questTaken[#world.questTaken + 1] = i end
-  g.GetLootRollItemLink = function(rollID) return world.rolls[rollID] end
+  g.PawnIsArmorBestTypeForPlayer = world.pawn and
+    function(item)
+      local b = world.armorBest[item.Link]
+      if b == nil then return true end -- best type unless a test says otherwise
+      return b
+    end or nil
   if world.withSettings then
     local S = {}
     S.RegisterVerticalLayoutCategory = function(n)
@@ -90,9 +108,11 @@ local function loadAddon(world)
     end
     S.CreateCheckbox = function() world.settingsChecks = world.settingsChecks + 1 end
     S.CreateSliderOptions = function(min, max, step)
-      world.sliderOpts = { min = min, max = max, step = step }
+      world.sliderOpts = { min = min, max = max, step = step,
+        SetLabelFormatter = function(_, f) world.sliderFormatter = f end }
       return world.sliderOpts
     end
+    g.MinimalSliderWithSteppersMixin = { Label = { Right = "RIGHT" } }
     S.CreateSlider = function() world.settingsSliders = world.settingsSliders + 1 end
     S.CreateDropdown = function(_, _, getOptions)
       world.settingsDropdowns[#world.settingsDropdowns + 1] = getOptions
@@ -120,11 +140,11 @@ local function loadAddon(world)
 end
 
 local function newWorld()
-  return { bags = {}, slots = {}, minLevels = {}, levels = {},
+  return { bags = {}, slots = {}, minLevels = {}, levels = {}, time = 1000,
            equippedSlots = {}, equipped = {}, printed = {}, timers = {},
            inCombat = false, pawn = true, pawnNil = {}, upgradeLists = {},
+           armorBest = {}, rarities = {},
            ilvlDiffs = {}, scales = {}, savedVars = nil, playerLevel = 80,
-           questChoices = {}, questTaken = {}, rolls = {},
            withSettings = false, settingsReg = {}, settingsChecks = 0,
            settingsSliders = 0, settingsDropdowns = {} }
 end
@@ -160,12 +180,11 @@ do
   check("default enabled", o.enabled == true)
   check("default announce", o.announce == true)
   check("default audit off", o.audit == false)
-  check("default threshold 0.5", o.minUpgradePct == 0.5)
+  check("default threshold 0", o.minUpgradePct == 0)
   check("default two-slot manual", o.autoTwoSlot == false)
   check("default ilvl on", o.includeIlvl == true)
   check("default scale any", o.scale == "")
-  check("default quest highlight", o.questPicker == "highlight")
-  check("default loot advisor on", o.lootAdvisor == true)
+  check("default keepHeirlooms", o.keepHeirlooms == true)
 end
 
 -- 3. Single-slot upgrade equipped by full link, margin in the message.
@@ -186,14 +205,19 @@ end
 -- 4. Percent threshold gates equips.
 do
   local w = newWorld()
+  w.savedVars = { minUpgradePct = 5 }
   local link = "|cffa335ee|Hitem:555|h[Helm]|h|r"
   w.bags[0] = { link }
   w.slots[link] = "INVTYPE_HEAD"
-  w.upgradeLists[link] = upgrade("A", 0.004) -- 0.4% < 0.5% default bar
+  w.upgradeLists[link] = upgrade("A", 0.04) -- 4% < 5% bar
   local ns = loadAddon(w)
+  clientLoaded(w)
   ns.scan()
   check("below-threshold skipped", #w.equipped == 0)
   check("below-threshold silent", #w.printed == 0)
+  w.upgradeLists[link] = upgrade("A", 0.05) -- exactly 5%
+  ns.scan()
+  check("at-threshold equipped", #w.equipped == 1)
 end
 
 -- 5. Scale filter.
@@ -411,116 +435,8 @@ do
   check("disabled addon equips nothing", #w.equipped == 0)
 end
 
--- 19. Quest picker highlights the best choice by default.
-do
-  local w = newWorld()
-  local bad = "|cff0070dd|Hitem:300|h[Bad]|h|r"
-  local good = "|cffa335ee|Hitem:301|h[Good]|h|r"
-  w.questChoices = { bad, good }
-  w.upgradeLists[good] = upgrade("A", 0.08)
-  local ns = loadAddon(w)
-  w.frame.onEvent(nil, "QUEST_COMPLETE")
-  check("highlight prints the pick", #w.printed == 1)
-  check("highlight names best", w.printed[1]:find("Good", 1) ~= nil)
-  check("highlight takes nothing", #w.questTaken == 0)
-end
 
--- 20. Quest picker auto-picks the best choice.
-do
-  local w = newWorld()
-  w.savedVars = { questPicker = "auto" }
-  local good = "|cffa335ee|Hitem:301|h[Good]|h|r"
-  local bad = "|cff0070dd|Hitem:300|h[Bad]|h|r"
-  w.questChoices = { good, bad }
-  w.upgradeLists[good] = upgrade("A", 0.08)
-  local ns = loadAddon(w)
-  clientLoaded(w)
-  w.frame.onEvent(nil, "QUEST_COMPLETE")
-  check("auto takes best index", #w.questTaken == 1 and w.questTaken[1] == 1)
-end
-
--- 21. Quest picker: off / single choice / no upgrade stay quiet-ish.
-do
-  local w = newWorld()
-  w.savedVars = { questPicker = "off" }
-  w.questChoices = { "|cff0070dd|Hitem:300|h[A]|h|r", "|cff0070dd|Hitem:301|h[B]|h|r" }
-  local ns = loadAddon(w)
-  clientLoaded(w)
-  w.frame.onEvent(nil, "QUEST_COMPLETE")
-  check("quest off is silent", #w.printed == 0 and #w.questTaken == 0)
-end
-do
-  local w = newWorld()
-  w.questChoices = { "|cff0070dd|Hitem:300|h[Only]|h|r" }
-  local ns = loadAddon(w)
-  w.frame.onEvent(nil, "QUEST_COMPLETE")
-  check("single choice is silent", #w.printed == 0 and #w.questTaken == 0)
-end
-do
-  local w = newWorld()
-  w.savedVars = { questPicker = "auto" }
-  w.questChoices = { "|cff0070dd|Hitem:300|h[A]|h|r", "|cff0070dd|Hitem:301|h[B]|h|r" }
-  local ns = loadAddon(w)
-  clientLoaded(w)
-  w.frame.onEvent(nil, "QUEST_COMPLETE")
-  check("no upgrade takes nothing", #w.questTaken == 0)
-  check("no upgrade says so", #w.printed == 1)
-end
-
--- 22. Audit mode degrades quest auto-pick to highlight.
-do
-  local w = newWorld()
-  w.savedVars = { questPicker = "auto", audit = true }
-  local good = "|cffa335ee|Hitem:301|h[Good]|h|r"
-  w.questChoices = { good, "|cff0070dd|Hitem:300|h[Bad]|h|r" }
-  w.upgradeLists[good] = upgrade("A", 0.08)
-  local ns = loadAddon(w)
-  clientLoaded(w)
-  w.frame.onEvent(nil, "QUEST_COMPLETE")
-  check("audit takes nothing", #w.questTaken == 0)
-  check("audit still highlights", #w.printed == 1)
-end
-
--- 23. Loot advisor: NEED upgrades, GREED the rest, silence when unsure.
-do
-  local w = newWorld()
-  local up = "|cffa335ee|Hitem:400|h[Up]|h|r"
-  w.rolls[7] = up
-  w.upgradeLists[up] = upgrade("A", 0.1)
-  local ns = loadAddon(w)
-  w.frame.onEvent(nil, "START_LOOT_ROLL", 7)
-  check("upgrade advises NEED", w.printed[1]:find("NEED", 1) ~= nil)
-end
-do
-  local w = newWorld()
-  local no = "|cff0070dd|Hitem:401|h[No]|h|r"
-  w.rolls[8] = no
-  local ns = loadAddon(w)
-  w.frame.onEvent(nil, "START_LOOT_ROLL", 8)
-  check("non-upgrade advises GREED", w.printed[1]:find("GREED", 1) ~= nil)
-end
-do
-  local w = newWorld()
-  local maybe = "|cffa335ee|Hitem:402|h[Maybe]|h|r"
-  w.rolls[9] = maybe
-  w.pawnNil[maybe] = true
-  local ns = loadAddon(w)
-  w.frame.onEvent(nil, "START_LOOT_ROLL", 9)
-  check("unsure stays silent", #w.printed == 0)
-end
-do
-  local w = newWorld()
-  w.savedVars = { lootAdvisor = false }
-  local up = "|cffa335ee|Hitem:400|h[Up]|h|r"
-  w.rolls[7] = up
-  w.upgradeLists[up] = upgrade("A", 0.1)
-  local ns = loadAddon(w)
-  clientLoaded(w)
-  w.frame.onEvent(nil, "START_LOOT_ROLL", 7)
-  check("advisor off is silent", #w.printed == 0)
-end
-
--- 24. Settings panel registers all nine options.
+-- 19. Settings panel-- 24. Settings panel registers all eight options.
 do
   local w = newWorld()
   w.withSettings = true
@@ -535,19 +451,18 @@ do
   local keys = {}
   for _, r in ipairs(w.settingsReg) do keys[r.key] = r end
   for _, k in ipairs({ "enabled", "announce", "audit", "minUpgradePct",
-      "autoTwoSlot", "includeIlvl", "scale", "questPicker", "lootAdvisor" }) do
+      "autoTwoSlot", "includeIlvl", "keepHeirlooms", "scale" }) do
     check("setting registered: " .. k, keys[k] ~= nil)
   end
   check("six checkboxes", w.settingsChecks == 6)
   check("one slider", w.settingsSliders == 1)
-  check("slider range", w.sliderOpts.min == 0.5 and w.sliderOpts.max == 25
-    and w.sliderOpts.step == 0.5)
-  check("two dropdowns", #w.settingsDropdowns == 2)
+  check("slider range", w.sliderOpts.min == 0 and w.sliderOpts.max == 25
+    and w.sliderOpts.step == 5)
+  check("slider value label", w.sliderFormatter == "RIGHT")
+  check("one dropdown", #w.settingsDropdowns == 1)
   local scaleData = w.settingsDropdowns[1]()
   check("scale dropdown has Any + visible",
     #scaleData == 2 and scaleData[1].value == "" and scaleData[2].value == "A")
-  local questData = w.settingsDropdowns[2]()
-  check("quest dropdown has three modes", #questData == 3)
   check("built once", (function()
     local n = #w.settingsReg
     w.frame.onEvent(nil, "PLAYER_ENTERING_WORLD")
@@ -555,7 +470,7 @@ do
   end)())
 end
 
--- 25. Slash commands: toggle, announce, config hint.
+-- 20. Slash commands: toggle, announce, config hint.
 do
   local w = newWorld()
   local ns = loadAddon(w)
@@ -567,6 +482,181 @@ do
   w.env.SlashCmdList.VOCGEAR("config")
   check("/vg config prints hint without Settings",
     w.printed[#w.printed]:find("Settings > AddOns", 1) ~= nil)
+end
+
+-- 21. Swap memory breaks A<->B ping-pong, then expires.
+do
+  local w = newWorld()
+  local helmA = "|cff0070dd|Hitem:500|h[Helm A]|h|r"
+  local helmB = "|cffa335ee|Hitem:501|h[Helm B]|h|r"
+  w.equippedSlots[1] = helmA
+  w.bags[0] = { helmB }
+  w.slots[helmA], w.slots[helmB] = "INVTYPE_HEAD", "INVTYPE_HEAD"
+  w.upgradeLists[helmA], w.upgradeLists[helmB] = upgrade("Y", 0.05), upgrade("X", 0.05)
+  local ns = loadAddon(w)
+  ns.scan() -- equips B, displaces A back to bags
+  check("first equip happens", #w.equipped == 1)
+  ns.scan() -- A flagged by Pawn but freshly displaced: left alone
+  check("ping-pong broken", #w.equipped == 1)
+  w.time = w.time + 31
+  ns.scan() -- memory expired: A equips again
+  check("memory expires", #w.equipped == 2)
+end
+
+-- 22. Player's own manual swaps are respected, not attributed.
+do
+  local w = newWorld()
+  local helmA = "|cff0070dd|Hitem:500|h[Helm A]|h|r"
+  local helmB = "|cffa335ee|Hitem:501|h[Helm B]|h|r"
+  w.equippedSlots[1] = helmA
+  w.bags[0] = {}
+  w.slots[helmA] = "INVTYPE_HEAD"
+  w.upgradeLists[helmA] = upgrade("A", 0.05)
+  local ns = loadAddon(w)
+  ns.scan() -- baseline snapshot
+  w.equippedSlots[1] = helmB -- player swaps manually; A lands in bags
+  w.bags[0] = { helmA }
+  ns.scan()
+  check("manual swap not yanked back", #w.equipped == 0)
+  check("manual swap unattributed", ns.slotTouches[1] == nil)
+end
+
+-- 23. Breaker trips on 3 same-slot equips, pauses, then resumes.
+do
+  local w = newWorld()
+  local mk = function(id) return "|cffa335ee|Hitem:" .. id .. "|h[Helm " .. id .. "]|h|r" end
+  local a, b, c, d = mk(510), mk(511), mk(512), mk(513)
+  w.equippedSlots[1] = a
+  w.bags[0] = { b, c, d }
+  for _, l in ipairs({ a, b, c, d }) do
+    w.slots[l] = "INVTYPE_HEAD"
+    w.upgradeLists[l] = upgrade("A", 0.05)
+  end
+  local ns = loadAddon(w)
+  ns.scan() -- equips B
+  ns.scan() -- equips C
+  ns.scan() -- equips D
+  ns.scan() -- sees 3rd touch: trips
+  check("breaker trips", ns.isPaused())
+  check("trip announced", w.printed[#w.printed]:find("loop detected", 1) ~= nil)
+  check("trip stops equips", #w.equipped == 3)
+  w.time = w.time + 61
+  ns.scan() -- pause + memory expired: equips again
+  check("auto-resumes after pause", #w.equipped == 4)
+end
+
+-- 24. Manual swaps never trip the breaker.
+do
+  local w = newWorld()
+  w.equippedSlots[1] = "|cff0070dd|Hitem:520|h[A]|h|r"
+  local ns = loadAddon(w)
+  ns.scan()
+  for i = 1, 3 do
+    w.equippedSlots[1] = "|cff0070dd|Hitem:" .. (520 + i) .. "|h[M" .. i .. "]|h|r"
+    ns.scan()
+  end
+  check("manual swaps don't pause", not ns.isPaused())
+end
+
+-- 25. Re-enabling clears the guard (/vg twice resumes now).
+do
+  local w = newWorld()
+  local ns = loadAddon(w)
+  ns.pausedUntil = w.time + 60
+  ns.recentSwap["|cff0070dd|Hitem:1|h[X]|h|r"] = w.time
+  check("paused", ns.isPaused())
+  w.env.SlashCmdList.VOCGEAR("")
+  w.env.SlashCmdList.VOCGEAR("")
+  check("re-enable clears pause", not ns.isPaused())
+  check("re-enable clears memory", next(ns.recentSwap) == nil)
+end
+
+-- 26. Wrong armor type: item-level upgrades skipped, score path trusts Pawn.
+do
+  local w = newWorld()
+  local cloth = "|cffa335ee|Hitem:600|h[Cloth Helm]|h|r"
+  w.bags[0] = { cloth }
+  w.slots[cloth] = "INVTYPE_HEAD"
+  w.upgradeLists[cloth] = nil
+  w.ilvlDiffs[cloth] = 8
+  w.armorBest[cloth] = false -- e.g. plate wearer, cloth helm
+  local ns = loadAddon(w)
+  ns.scan()
+  check("wrong-armor ilvl skipped", #w.equipped == 0)
+  check("wrong-armor ilvl silent", #w.printed == 0)
+end
+do
+  local w = newWorld()
+  local helm = "|cffa335ee|Hitem:601|h[Helm]|h|r"
+  w.bags[0] = { helm }
+  w.slots[helm] = "INVTYPE_HEAD"
+  w.upgradeLists[helm] = upgrade("A", 0.05)
+  w.armorBest[helm] = false -- Pawn pre-gates score entries itself; pass through
+  local ns = loadAddon(w)
+  ns.scan()
+  check("score path trusts Pawn's own gate", #w.equipped == 1)
+end
+do
+  local w = newWorld()
+  local helm = "|cffa335ee|Hitem:602|h[Helm]|h|r"
+  w.bags[0] = { helm }
+  w.slots[helm] = "INVTYPE_HEAD"
+  w.upgradeLists[helm] = nil
+  w.ilvlDiffs[helm] = 8
+  local ns = loadAddon(w)
+  w.env.PawnIsArmorBestTypeForPlayer = nil -- older Pawn without the API
+  ns.scan()
+  check("missing armor API fails open", #w.equipped == 1)
+end
+
+-- 27. Equipped heirlooms are kept by default.
+do
+  local w = newWorld()
+  local heir = "|cffa335ee|Hitem:700|h[Heirloom Helm]|h|r"
+  local cand = "|cffa335ee|Hitem:701|h[Helm]|h|r"
+  w.equippedSlots[1] = heir
+  w.rarities[heir] = 7
+  w.bags[0] = { cand }
+  w.slots[cand] = "INVTYPE_HEAD"
+  w.upgradeLists[cand] = upgrade("A", 0.05)
+  local ns = loadAddon(w)
+  ns.scan()
+  ns.scan()
+  check("heirloom not replaced", #w.equipped == 0)
+  check("heirloom keep announced once", #w.printed == 1)
+  check("heirloom wording", w.printed[1]:find("keeping heirloom", 1) ~= nil)
+end
+do
+  local w = newWorld()
+  w.savedVars = { keepHeirlooms = false }
+  local heir = "|cffa335ee|Hitem:700|h[Heirloom Helm]|h|r"
+  local cand = "|cffa335ee|Hitem:701|h[Helm]|h|r"
+  w.equippedSlots[1] = heir
+  w.rarities[heir] = 7
+  w.bags[0] = { cand }
+  w.slots[cand] = "INVTYPE_HEAD"
+  w.upgradeLists[cand] = upgrade("A", 0.05)
+  local ns = loadAddon(w)
+  clientLoaded(w)
+  ns.scan()
+  check("heirloom replaced when unprotected", #w.equipped == 1)
+end
+do
+  local w = newWorld()
+  w.savedVars = { autoTwoSlot = true }
+  local heirRing = "|cffa335ee|Hitem:702|h[Heirloom Ring]|h|r"
+  local ringA = "|cff0070dd|Hitem:100|h[Ring A]|h|r"
+  local cand = "|cffa335ee|Hitem:703|h[Ring C]|h|r"
+  w.equippedSlots[11], w.equippedSlots[12] = ringA, heirRing
+  w.rarities[heirRing] = 7
+  w.bags[0] = { cand }
+  w.slots[cand] = "INVTYPE_FINGER"
+  w.upgradeLists[cand] = upgrade("A", 0.05, heirRing)
+  local ns = loadAddon(w)
+  clientLoaded(w)
+  ns.scan()
+  check("two-slot heirloom not replaced", #w.equipped == 0)
+  check("two-slot heirloom announced", #w.printed == 1)
 end
 
 print("scan_test.lua: " .. passed .. " checks passed")
