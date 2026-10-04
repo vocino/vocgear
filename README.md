@@ -15,9 +15,6 @@ handles the rest, so valuations stay correct as gear changes.
 Rings and trinkets are announced by default; enable auto-equip
 for them and VocGear takes the weaker slot.
 
-Quest-complete dialogs get a printed pick (or auto-pick), and
-group-loot rolls get a NEED/GREED recommendation in chat.
-
 ```
 /vg          toggle on/off
 /vg announce toggle chat lines
@@ -29,12 +26,11 @@ group-loot rolls get a NEED/GREED recommendation in chat.
 Settings > AddOns > VocGear, or `/vg config`:
 
 - Enable auto-equip, chat announcements, audit mode (announce only)
-- Minimum upgrade % (default 0.5, Pawn's own bar)
+- Minimum upgrade % (0-25 in 5s, default 0 = everything Pawn flags)
 - Auto-equip rings and trinkets (default off)
 - Include item-level upgrades (default on)
+- Don't replace heirlooms (default on)
 - Pawn scale picker (default any visible scale)
-- Quest rewards: off / highlight / auto-pick (default highlight)
-- Loot roll advisor (default on)
 
 ## What's inside
 

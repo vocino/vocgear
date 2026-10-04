@@ -2,7 +2,7 @@
 
 ## Code Map
 
-- `main.lua` — the whole addon: scan, quest/loot advisors, Settings panel
+- `main.lua` — the whole addon: bag scans + Settings panel
 - `VocGear.toc` — addon metadata (`OptionalDeps: Pawn`)
 - `tests/scan_test.lua` — stub-harness regression tests (`lua tests/scan_test.lua`)
 - `VERSIONING.md` — tag-driven semver releases (same scheme as vocwarbank)
