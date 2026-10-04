@@ -29,6 +29,13 @@ slots, a blind equip can replace the better one.
 
 - `main.lua`: the whole addon — scan bags, ask Pawn, equip
 - `VocGear.toc`: metadata
+- `tests/scan_test.lua`: stub-harness regression tests, no WoW client needed
+
+## Tests
+
+```
+lua tests/scan_test.lua
+```
 
 ## License
 
