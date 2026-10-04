@@ -482,6 +482,8 @@ do
   w.env.SlashCmdList.VOCGEAR("config")
   check("/vg config prints hint without Settings",
     w.printed[#w.printed]:find("Settings > AddOns", 1) ~= nil)
+  check("only /vg registered",
+    w.env.SLASH_VOCGEAR1 == "/vg" and w.env.SLASH_VOCGEAR2 == nil)
 end
 
 -- 21. Swap memory breaks A<->B ping-pong, then expires.

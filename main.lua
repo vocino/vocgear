@@ -414,10 +414,9 @@ ns.frame:SetScript("OnEvent", function(_, event, arg1)
   ns.scan()
 end)
 
--- Blizzard's slash dispatcher reads SLASH_* globals by name, so these two
--- cannot be namespaced; the explicit _G marks them as deliberate.
+-- Blizzard's slash dispatcher reads SLASH_* globals by name, so this
+-- cannot be namespaced; the explicit _G marks it as deliberate.
 _G.SLASH_VOCGEAR1 = "/vg"
-_G.SLASH_VOCGEAR2 = "/vocgear"
 SlashCmdList.VOCGEAR = function(msg)
   local o = ns.opts()
   msg = strtrim(msg or ""):lower()
