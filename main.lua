@@ -10,7 +10,7 @@ function ns.opts()
   return ns.db
 end
 
--- Pawn's current API (verified against BetterBags' integration):
+-- Pawn's API (verified against Pawn 2.13.16 source; see .reference/pawn-analysis.md):
 -- PawnGetItemData exists when Pawn is loaded; PawnShouldItemLinkHaveUpgradeArrowUnbudgeted
 -- answers the upgrade question per item link. The old PawnIsContainerItemAnUpgrade
 -- global no longer exists, so don't use it.
@@ -23,14 +23,25 @@ end
 -- better one. Announce those, don't equip them. (v1 scope)
 ns.twoSlot = { INVTYPE_FINGER = true, INVTYPE_TRINKET = true }
 
-ns.flagged = {} -- itemIDs announced as two-slot upgrades, per session
+ns.flagged = {} -- links announced as not-auto-equipped, per session
 ns.scanning = false
+
+-- Pawn may load after us or init late; one outstanding retry covers the race
+-- without stacking a new timer on every bag event.
+function ns.retrySoon()
+  if ns.retryPending then return end
+  ns.retryPending = true
+  C_Timer.After(5, function()
+    ns.retryPending = false
+    ns.scan()
+  end)
+end
 
 function ns.scan()
   if ns.scanning then return end
   local o = ns.opts()
   if not o.enabled then return end
-  if not ns.pawnReady() then return end
+  if not ns.pawnReady() then ns.retrySoon() return end
   if InCombatLockdown() then return end
   ns.scanning = true
   for bag = 0, NUM_BAG_SLOTS do
@@ -39,15 +50,17 @@ function ns.scan()
       if link then
         local ok, isUpgrade = pcall(_G.PawnShouldItemLinkHaveUpgradeArrowUnbudgeted, link, true)
         if ok and isUpgrade then
-          local id = tonumber(link:match("item:(%d+)"))
-          local _, _, _, _, _, _, _, _, equipSlot = GetItemInfo(link)
-          if ns.twoSlot[equipSlot] then
-            if o.announce and id and not ns.flagged[id] then
-              ns.flagged[id] = true
-              print("VocGear: Pawn upgrade in bags (two slots, not auto-equipped): " .. link)
+          -- Instant (uncached-safe) equip-loc lookup, same call Pawn itself uses.
+          local _, _, _, equipSlot = C_Item.GetItemInfoInstant(link)
+          if equipSlot == nil or ns.twoSlot[equipSlot] then
+            -- Unknown slot or two slots: announce, don't blind-equip.
+            -- Keyed by full link so bonus variants each get one line.
+            if o.announce and not ns.flagged[link] then
+              ns.flagged[link] = true
+              print("VocGear: Pawn upgrade in bags (not auto-equipped): " .. link)
             end
-          elseif id then
-            EquipItemByName(id)
+          else
+            EquipItemByName(link) -- full link equips the exact bonus variant
             if o.announce then print("VocGear: equipped " .. link .. " (Pawn upgrade)") end
             ns.scanning = false
             return -- one equip per scan; the bag update re-triggers for the rest
@@ -65,7 +78,12 @@ ns.frame:RegisterEvent("BAG_UPDATE_DELAYED")
 ns.frame:RegisterEvent("PLAYER_ENTERING_WORLD")
 ns.frame:RegisterEvent("PLAYER_REGEN_ENABLED")
 ns.frame:SetScript("OnEvent", function(_, event, arg1)
-  if event == "ADDON_LOADED" and arg1 ~= "Pawn" and arg1 ~= name then return end
+  if event == "ADDON_LOADED" then
+    -- The client replaces the SavedVariables global with the loaded table
+    -- after our file ran, so rebind or settings never persist.
+    if arg1 == name then ns.db = VocGearDB end
+    if arg1 ~= "Pawn" and arg1 ~= name then return end
+  end
   ns.scan()
 end)
 
