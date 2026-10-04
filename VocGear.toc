@@ -1,0 +1,12 @@
+## Interface: 120100
+## Title: VocGear
+## Notes: Equip what Pawn says is an upgrade. Out of combat only.
+## Author: vocino
+## Version: @project-version@
+## Category: Inventory
+## SavedVariables: VocGearDB
+## OptionalDeps: Pawn
+## X-Website: https://github.com/vocino/vocgear
+## X-License: MIT
+
+main.lua
