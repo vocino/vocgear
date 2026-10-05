@@ -12,6 +12,31 @@
 - `.reference/`: local analysis checkouts, never packaged or committed
 - `.github`: `test.yml` (tests + lint) and `release.yml` (packager)
 
+## API references
+
+Code targets the build in `## Interface:` of the `.toc`. Verify every
+WoW API fact against that build, in this order, and nothing else:
+
+1. Blizzard's own API docs for the build: `/api` in the client, or the
+   mirror at https://github.com/Gethe/wow-ui-source, branch `live`,
+   folder `Interface/AddOns/Blizzard_APIDocumentationGenerated/`.
+   Names, namespaces, arguments, returns, and events come from here.
+2. Blizzard's UI source in the same mirror for templates, mixins, and
+   `Blizzard_Deprecated*` (what is leaving, what replaces it).
+3. The Lua 5.1 manual, https://www.lua.org/manual/5.1/. The client is
+   Lua 5.1 in a sandbox; nothing from 5.2+ exists there.
+4. https://warcraft.wiki.gg for prose only, after checking its patch
+   note; a signature there is confirmed in source 1 before use.
+
+Never Wowpedia (fandom), WoWWiki, forums, tutorials, or memory of an
+older patch. A bare global that now lives in a `C_*` namespace is the
+usual sign of stale information. `.luacheckrc` is the allowlist of
+verified globals: lint fails on any other, and a name is added only
+after confirming it in source 1 for the current build. Pawn's API is
+verified the same way against its current source (see
+`.reference/pawn-analysis.md`). Full rule and a local-checkout recipe:
+`FAMILY.md`, Sources of truth.
+
 ## Family
 
 VocGear is one of the Voc addons. Naming, slash grammar, chat voice,
