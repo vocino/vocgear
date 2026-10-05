@@ -1,28 +1,35 @@
 # VocGear
 
-## Problem
+Pawn tells you what's an upgrade but won't act on it. VocGear is the
+muscle: when a Pawn-flagged upgrade lands in your bags, it equips it,
+out of combat, and prints the margin. A small panel of rules tunes
+what counts. Requires [Pawn](https://www.curseforge.com/wow/addons/pawn).
 
-Pawn tells you what's an upgrade but won't act on it. VocGear
-is the muscle: equip what Pawn flags, out of combat,
-with a small panel of rules to tune it.
+## Install
+
+Download the latest zip from [GitHub
+Releases](https://github.com/vocino/vocgear/releases) (also on
+CurseForge and Wago), copy the folder into `Interface/AddOns`, and
+make sure it is named `VocGear` (the folder name must match the
+`.toc` file).
 
 ## Use
 
-When a Pawn-flagged upgrade lands in your bags, VocGear equips it
-and prints the margin. One equip per scan; the next bag update
-handles the rest, so valuations stay correct as gear changes.
+VocGear equips one upgrade per scan; the next bag update handles the
+rest, so valuations stay correct as gear changes. Rings and trinkets
+are announced by default; enable auto-equip for them and VocGear
+takes the weaker slot.
 
-Rings and trinkets are announced by default; enable auto-equip
-for them and VocGear takes the weaker slot.
-
-A Check Bags button on the character sheet (or `/vg scan`)
-re-runs the check on demand; changing options rescans too.
+A Check Bags button on the character sheet (next to Pawn's) re-runs
+the check on demand. Changing any option rescans too.
 
 ```
-/vg          toggle on/off
-/vg announce toggle chat lines
-/vg config   open Settings > AddOns > VocGear
-/vg scan     check bags now
+/vg            toggle auto-equip on/off
+/vg on|off     set auto-equip explicitly
+/vg scan       check bags now
+/vg announce   toggle chat announcements
+/vg config     open Settings > AddOns > VocGear
+/vg help       this list (/vocgear works too)
 ```
 
 ## Config
@@ -37,16 +44,27 @@ Settings > AddOns > VocGear, or `/vg config`:
 - Pawn scale picker (default any visible scale)
 - Character sheet button (default on)
 
+## How it works
+
+Every bag item goes through Pawn's own upgrade check, filtered by
+your scale, threshold, and item-level choices. Single-slot upgrades
+equip at once; two-slot items (rings, trinkets) equip into the slot
+Pawn names, the empty slot, or the weaker one, and are only announced
+unless you opt in. A loop guard leaves freshly displaced gear alone
+for 30 seconds and pauses auto-equip for a minute if the same slot
+flips three times, so two scales can never fight over one item.
+
 ## What's inside
 
-- `main.lua`: the whole addon - scan bags, ask Pawn, equip + advise
+- `main.lua`: the whole addon: scan bags, ask Pawn, equip or advise
 - `VocGear.toc`: metadata
-- `tests/scan_test.lua`: stub-harness regression tests, no WoW client needed
+- `tests/run.lua`: stub-harness regression tests, no WoW client needed
 
 ## Tests
 
 ```
-lua tests/scan_test.lua
+lua tests/run.lua
+luacheck .
 ```
 
 ## License
@@ -56,3 +74,5 @@ MIT
 ---
 
 Part of the Voc family: tiny addons that do one job.
+Siblings: [VocWarbank](https://github.com/vocino/vocwarbank) ·
+[VocGear](https://github.com/vocino/vocgear)
