@@ -30,11 +30,21 @@ local function loadAddon(world)
     end,
   }
   g.C_Item = {
-    GetItemInfoInstant = function(link) return nil, nil, nil, world.slots[link], nil, world.classIDs[link], world.subclassIDs[link] end,
+    GetItemInfoInstant = function(link) return world.itemIDs[link], nil, nil, world.slots[link], nil, world.classIDs[link], world.subclassIDs[link] end,
     GetItemInfo = function(link)
-      return nil, nil, world.rarities[link], nil, world.minLevels[link]
+      return link, link, world.rarities[link], 80, world.minLevels[link],
+        nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, world.setIDs[link]
     end,
     GetDetailedItemLevelInfo = function(link) return world.levels[link] end,
+    GetItemSetInfo = function(setID) return world.setNames[setID] end,
+    GetSetBonusesForSpecializationByItemID = function(specID, itemID)
+      world.lastBonusSpec = specID
+      return world.setBonusSpells[itemID]
+    end,
+  }
+  g.C_SpecializationInfo = {
+    GetSpecialization = function() return world.specIndex end,
+    GetSpecializationInfo = function() return world.specID end,
   }
   g.UnitLevel = function() return world.playerLevel end
   g.GetTime = function() return world.time end
@@ -178,6 +188,8 @@ local function newWorld()
            equippedSlots = {}, equipped = {}, printed = {}, timers = {},
            inCombat = false, pawn = true, pawnNil = {}, upgradeLists = {},
            armorBest = {}, rarities = {},
+           setIDs = {}, itemIDs = {}, setBonusSpells = {}, setNames = {},
+           specIndex = nil, specID = nil, lastBonusSpec = nil,
            ilvlDiffs = {}, scales = {}, savedVars = nil, playerLevel = 80,
            withSettings = false, settingsReg = {}, settingsChecks = 0,
            settingsSliders = 0, settingsDropdowns = {}, settingCallbacks = {},
@@ -194,6 +206,24 @@ end
 
 local function upgrade(scale, pct, existing)
   return { { ScaleName = scale, PercentUpgrade = pct, ExistingItemLink = existing } }
+end
+
+-- Tier piece factory for set tests: unique link + itemID, set membership,
+-- and (unless bonuses == false) two bonus spells for the current spec.
+local tierSeq = 90000
+local function tierPiece(w, setID, bonuses)
+  tierSeq = tierSeq + 1
+  local link = "|cffa335ee|Hitem:" .. tierSeq .. "|h[Tier " .. tierSeq .. "]|h|r"
+  w.setIDs[link] = setID
+  w.itemIDs[link] = tierSeq
+  if bonuses ~= false then w.setBonusSpells[tierSeq] = { 1101, 1102 } end
+  return link
+end
+
+-- Every set test plays a character with a spec selected.
+local function specReady(w, specID)
+  w.specIndex = 1
+  w.specID = specID or 70
 end
 
 -- 1. SavedVariables rebind.
@@ -222,6 +252,7 @@ do
   check("default scale any", o.scale == "")
   check("default keepHeirlooms", o.keepHeirlooms == true)
   check("default sheetButton", o.sheetButton == true)
+  check("default protectSets", o.protectSets == true)
 end
 
 -- 3. Single-slot upgrade equipped by full link, margin in the message.
@@ -473,7 +504,7 @@ do
 end
 
 
--- 19. Settings panel registers all nine options.
+-- 19. Settings panel registers all ten options.
 do
   local w = newWorld()
   w.withSettings = true
@@ -488,10 +519,10 @@ do
   local keys = {}
   for _, r in ipairs(w.settingsReg) do keys[r.key] = r end
   for _, k in ipairs({ "enabled", "announce", "audit", "minUpgradePct",
-      "autoTwoSlot", "includeIlvl", "keepHeirlooms", "scale", "sheetButton" }) do
+      "autoTwoSlot", "includeIlvl", "keepHeirlooms", "protectSets", "scale", "sheetButton" }) do
     check("setting registered: " .. k, keys[k] ~= nil)
   end
-  check("seven checkboxes", w.settingsChecks == 7)
+  check("eight checkboxes", w.settingsChecks == 8)
   check("one slider", w.settingsSliders == 1)
   check("slider range", w.sliderOpts.min == 0 and w.sliderOpts.max == 25
     and w.sliderOpts.step == 5)
@@ -504,7 +535,7 @@ do
     for _, r in ipairs(w.settingsReg) do
       if not w.settingCallbacks[r.var] then return false end
     end
-    return #w.settingsReg == 9
+    return #w.settingsReg == 10
   end)())
   local clink = "|cffa335ee|Hitem:710|h[Helm]|h|r"
   w.bags[0] = { clink }
@@ -953,7 +984,11 @@ do
   w.env.SlashCmdList.VOCGEAR("help")
   for _, leaked in ipairs({ "bag", "slot", "slotID", "link", "ev", "o", "s", "db",
       "snap", "pair", "held", "btn", "now", "bar", "item", "line", "msg",
-      "cand", "cur", "equipLoc", "classID", "subclassID" }) do
+      "cand", "cur", "equipLoc", "classID", "subclassID",
+      "setCtx", "readyThreshold", "readySet", "breakThreshold", "breakSet",
+      "completes", "candSet", "heldSet", "counts", "before", "after", "seen",
+      "spells", "specID", "itemID", "setID", "ctx", "threshold",
+      "okIdx", "okID", "idx" }) do
     check("no leaked global: " .. leaked, w.env[leaked] == nil)
   end
   check("slash global registered", w.env.SLASH_VOCGEAR1 == "/vg")
@@ -1095,6 +1130,309 @@ do
   check("wand reads melee", ns.weaponKind(wand) == "melee")
   ns.scan()
   check("wand over sword equips", #w.equipped == 1)
+end
+
+-- 42. Breaking an active set bonus announces, never equips.
+do
+  local w = newWorld()
+  specReady(w)
+  w.setNames[11] = "Testplate"
+  local t1, t2, t3, t4 = tierPiece(w, 11), tierPiece(w, 11), tierPiece(w, 11), tierPiece(w, 11)
+  w.equippedSlots[1], w.equippedSlots[3], w.equippedSlots[5], w.equippedSlots[7] = t1, t2, t3, t4
+  local off = "|cffa335ee|Hitem:910|h[Off Helm]|h|r"
+  w.bags[0] = { off }
+  w.slots[off] = "INVTYPE_HEAD"
+  w.upgradeLists[off] = upgrade("A", 0.05)
+  local ns = loadAddon(w)
+  ns.scan()
+  ns.scan()
+  check("4pc break not equipped", #w.equipped == 0)
+  check("4pc break announced once", #w.printed == 1)
+  check("veto wording", w.printed[1]:find("would break Testplate 4pc", 1) ~= nil)
+  check("bonus check uses current spec", w.lastBonusSpec == 70)
+end
+
+-- 43. Set swaps that keep every bonus intact still equip.
+do -- fifth piece is stats-only: 5 -> 4 keeps 4pc
+  local w = newWorld()
+  specReady(w)
+  local t = {}
+  for i = 1, 5 do t[i] = tierPiece(w, 11) end
+  w.equippedSlots[1], w.equippedSlots[3], w.equippedSlots[5], w.equippedSlots[7], w.equippedSlots[10] =
+    t[1], t[2], t[3], t[4], t[5]
+  local off = "|cffa335ee|Hitem:911|h[Off Helm]|h|r"
+  w.bags[0] = { off }
+  w.slots[off] = "INVTYPE_HEAD"
+  w.upgradeLists[off] = upgrade("A", 0.05)
+  local ns = loadAddon(w)
+  ns.scan()
+  check("5th piece swap equips", #w.equipped == 1)
+end
+do -- same-set sidegrade Pawn flags: count unchanged, equips
+  local w = newWorld()
+  specReady(w)
+  local t1, t2, t3, t4 = tierPiece(w, 11), tierPiece(w, 11), tierPiece(w, 11), tierPiece(w, 11)
+  w.equippedSlots[1], w.equippedSlots[3], w.equippedSlots[5], w.equippedSlots[7] = t1, t2, t3, t4
+  local cand = tierPiece(w, 11)
+  w.bags[0] = { cand }
+  w.slots[cand] = "INVTYPE_HEAD"
+  w.upgradeLists[cand] = upgrade("A", 0.05)
+  local ns = loadAddon(w)
+  ns.scan()
+  check("same-set swap equips", #w.equipped == 1)
+end
+
+-- 44. Bonus-completing tier pieces equip even when Pawn is silent.
+do -- 3 -> 4
+  local w = newWorld()
+  specReady(w)
+  w.setNames[11] = "Testplate"
+  local t1, t2, t3 = tierPiece(w, 11), tierPiece(w, 11), tierPiece(w, 11)
+  w.equippedSlots[1], w.equippedSlots[3], w.equippedSlots[5] = t1, t2, t3
+  local cand = tierPiece(w, 11)
+  w.bags[0] = { cand }
+  w.slots[cand] = "INVTYPE_LEGS"
+  local ns = loadAddon(w)
+  ns.scan()
+  check("3->4 completes", #w.equipped == 1 and w.equipped[1].item == cand)
+  check("completion names the bonus", w.printed[1]:find("completes Testplate 4pc", 1) ~= nil)
+end
+do -- 1 -> 2
+  local w = newWorld()
+  specReady(w)
+  w.equippedSlots[1] = tierPiece(w, 11)
+  local cand = tierPiece(w, 11)
+  w.bags[0] = { cand }
+  w.slots[cand] = "INVTYPE_SHOULDER"
+  local ns = loadAddon(w)
+  ns.scan()
+  check("1->2 completes", #w.equipped == 1)
+  check("2pc message", w.printed[1]:find("completes 2pc", 1) ~= nil)
+end
+do -- Pawn-flagged and completing: one equip, both reasons told
+  local w = newWorld()
+  specReady(w)
+  local t1, t2, t3 = tierPiece(w, 11), tierPiece(w, 11), tierPiece(w, 11)
+  w.equippedSlots[1], w.equippedSlots[3], w.equippedSlots[5] = t1, t2, t3
+  local cand = tierPiece(w, 11)
+  w.bags[0] = { cand }
+  w.slots[cand] = "INVTYPE_LEGS"
+  w.upgradeLists[cand] = upgrade("A", 0.05)
+  local ns = loadAddon(w)
+  ns.scan()
+  check("flagged completion equips once", #w.equipped == 1)
+  check("combined reasons", w.printed[1]:find("%+5%.0%%", 1) ~= nil
+    and w.printed[1]:find("completes 4pc", 1) ~= nil)
+end
+do -- audit mode reports the completion without equipping
+  local w = newWorld()
+  w.savedVars = { audit = true }
+  specReady(w)
+  local t1, t2, t3 = tierPiece(w, 11), tierPiece(w, 11), tierPiece(w, 11)
+  w.equippedSlots[1], w.equippedSlots[3], w.equippedSlots[5] = t1, t2, t3
+  local cand = tierPiece(w, 11)
+  w.bags[0] = { cand }
+  w.slots[cand] = "INVTYPE_LEGS"
+  local ns = loadAddon(w)
+  clientLoaded(w)
+  ns.scan()
+  check("audit completion equips nothing", #w.equipped == 0)
+  check("audit completion reported", #w.printed == 1
+    and w.printed[1]:find("would equip", 1) ~= nil
+    and w.printed[1]:find("completes 4pc", 1) ~= nil)
+end
+
+-- 45. A first tier piece Pawn rejects stays in bags, silently.
+do
+  local w = newWorld()
+  specReady(w)
+  local cand = tierPiece(w, 11)
+  w.bags[0] = { cand }
+  w.slots[cand] = "INVTYPE_HEAD"
+  local ns = loadAddon(w)
+  ns.scan()
+  check("0->1 equips nothing", #w.equipped == 0)
+  check("0->1 silent", #w.printed == 0)
+end
+
+-- 46. Breaking a set yourself declines it for the session.
+do -- no re-completion, past the swap-memory window, silently
+  local w = newWorld()
+  specReady(w)
+  local t1, t2 = tierPiece(w, 11), tierPiece(w, 11)
+  w.equippedSlots[1], w.equippedSlots[3] = t1, t2
+  local off = "|cffa335ee|Hitem:912|h[Off Helm]|h|r"
+  w.slots[off], w.slots[t1] = "INVTYPE_HEAD", "INVTYPE_HEAD"
+  local ns = loadAddon(w)
+  ns.scan() -- baseline snapshot; bags empty so nothing equips
+  w.equippedSlots[1] = off -- player breaks 2pc by hand; t1 lands in bags
+  w.bags[0] = { t1 }
+  ns.scan()
+  check("break declined", ns.setDeclined[11] == true)
+  check("declined set not re-completed", #w.equipped == 0)
+  check("decline silent", #w.printed == 0)
+  w.time = w.time + 31
+  ns.scan()
+  check("decline outlasts swap memory", #w.equipped == 0 and #w.printed == 0)
+end
+do -- vetoes for a declined set stay off too
+  local w = newWorld()
+  specReady(w)
+  local t1, t2, t3, t4 = tierPiece(w, 11), tierPiece(w, 11), tierPiece(w, 11), tierPiece(w, 11)
+  w.equippedSlots[1], w.equippedSlots[3], w.equippedSlots[5], w.equippedSlots[7] = t1, t2, t3, t4
+  local offA = "|cffa335ee|Hitem:913|h[Off Helm]|h|r"
+  local offB = "|cffa335ee|Hitem:914|h[Off Shoulders]|h|r"
+  local offC = "|cffa335ee|Hitem:915|h[Off Chest]|h|r"
+  w.slots[offA], w.slots[offB], w.slots[offC] = "INVTYPE_HEAD", "INVTYPE_SHOULDER", "INVTYPE_CHEST"
+  w.slots[t1], w.slots[t2] = "INVTYPE_HEAD", "INVTYPE_SHOULDER"
+  local ns = loadAddon(w)
+  ns.scan()
+  w.equippedSlots[1] = offA -- 4 -> 3 by hand: declined
+  w.bags[0] = { t1 }
+  ns.scan()
+  w.equippedSlots[3] = offB -- 3 -> 2 by hand: still declined
+  w.bags[0] = { t1, t2 }
+  ns.scan()
+  check("still declined", ns.setDeclined[11] == true)
+  w.bags[0] = { t1, t2, offC }
+  w.upgradeLists[offC] = upgrade("A", 0.05) -- 2 -> 1 crossing, veto suppressed
+  ns.scan()
+  check("declined veto suppressed", #w.equipped == 1 and w.equipped[1].item == offC)
+end
+
+-- 47. Re-completing a declined set by hand re-arms protection.
+do
+  local w = newWorld()
+  specReady(w)
+  local t1, t2 = tierPiece(w, 11), tierPiece(w, 11)
+  w.equippedSlots[1], w.equippedSlots[3] = t1, t2
+  local off = "|cffa335ee|Hitem:916|h[Off Helm]|h|r"
+  w.slots[off], w.slots[t1] = "INVTYPE_HEAD", "INVTYPE_HEAD"
+  local ns = loadAddon(w)
+  ns.scan()
+  w.equippedSlots[1] = off -- break 2 -> 1: declined
+  w.bags[0] = { t1 }
+  ns.scan()
+  check("declined after break", ns.setDeclined[11] == true)
+  w.equippedSlots[1] = t1 -- change of heart: complete 1 -> 2 by hand
+  w.bags[0] = { off }
+  ns.scan()
+  check("decline cleared", ns.setDeclined[11] == nil)
+  w.time = w.time + 31 -- let the manual-swap memory expire
+  w.upgradeLists[off] = upgrade("A", 0.05)
+  ns.scan() -- off-piece over tier would break 2 -> 1: vetoed again
+  check("veto re-armed", #w.equipped == 0 and #w.printed == 1)
+end
+
+-- 48. A set with no bonuses for the current spec gets no protection.
+do -- missing bonus record
+  local w = newWorld()
+  specReady(w)
+  local t1, t2, t3, t4 = tierPiece(w, 11, false), tierPiece(w, 11, false),
+    tierPiece(w, 11, false), tierPiece(w, 11, false)
+  w.equippedSlots[1], w.equippedSlots[3], w.equippedSlots[5], w.equippedSlots[7] = t1, t2, t3, t4
+  local off = "|cffa335ee|Hitem:917|h[Off Helm]|h|r"
+  w.bags[0] = { off }
+  w.slots[off] = "INVTYPE_HEAD"
+  w.upgradeLists[off] = upgrade("A", 0.05)
+  local ns = loadAddon(w)
+  ns.scan()
+  check("bonus-less set not protected", #w.equipped == 1)
+end
+do -- empty bonus record
+  local w = newWorld()
+  specReady(w)
+  local pieces = { tierPiece(w, 11), tierPiece(w, 11), tierPiece(w, 11), tierPiece(w, 11) }
+  for _, t in ipairs(pieces) do w.setBonusSpells[w.itemIDs[t]] = {} end
+  w.equippedSlots[1], w.equippedSlots[3], w.equippedSlots[5], w.equippedSlots[7] =
+    pieces[1], pieces[2], pieces[3], pieces[4]
+  local off = "|cffa335ee|Hitem:918|h[Off Helm]|h|r"
+  w.bags[0] = { off }
+  w.slots[off] = "INVTYPE_HEAD"
+  w.upgradeLists[off] = upgrade("A", 0.05)
+  local ns = loadAddon(w)
+  ns.scan()
+  check("empty bonus record not protected", #w.equipped == 1)
+end
+
+-- 49. "Prioritize set bonuses" off: pure Pawn behavior.
+do -- veto off
+  local w = newWorld()
+  w.savedVars = { protectSets = false }
+  specReady(w)
+  local t1, t2, t3, t4 = tierPiece(w, 11), tierPiece(w, 11), tierPiece(w, 11), tierPiece(w, 11)
+  w.equippedSlots[1], w.equippedSlots[3], w.equippedSlots[5], w.equippedSlots[7] = t1, t2, t3, t4
+  local off = "|cffa335ee|Hitem:919|h[Off Helm]|h|r"
+  w.bags[0] = { off }
+  w.slots[off] = "INVTYPE_HEAD"
+  w.upgradeLists[off] = upgrade("A", 0.05)
+  local ns = loadAddon(w)
+  clientLoaded(w)
+  ns.scan()
+  check("veto disabled", #w.equipped == 1)
+end
+do -- completion off
+  local w = newWorld()
+  w.savedVars = { protectSets = false }
+  specReady(w)
+  local t1, t2, t3 = tierPiece(w, 11), tierPiece(w, 11), tierPiece(w, 11)
+  w.equippedSlots[1], w.equippedSlots[3], w.equippedSlots[5] = t1, t2, t3
+  local cand = tierPiece(w, 11)
+  w.bags[0] = { cand }
+  w.slots[cand] = "INVTYPE_LEGS"
+  local ns = loadAddon(w)
+  clientLoaded(w)
+  ns.scan()
+  check("completion disabled", #w.equipped == 0 and #w.printed == 0)
+end
+
+-- 50. Breaking an old bonus to complete a new one: the veto wins.
+do
+  local w = newWorld()
+  specReady(w)
+  w.setNames[11], w.setNames[22] = "Oldplate", "Newplate"
+  local a1, a2, a3, a4 = tierPiece(w, 11), tierPiece(w, 11), tierPiece(w, 11), tierPiece(w, 11)
+  local b1 = tierPiece(w, 22)
+  w.equippedSlots[1], w.equippedSlots[3], w.equippedSlots[5], w.equippedSlots[10] = a1, a2, a3, a4
+  w.equippedSlots[7] = b1
+  local cand = tierPiece(w, 22) -- completes new 2pc, breaks old 4pc
+  w.bags[0] = { cand }
+  w.slots[cand] = "INVTYPE_HEAD"
+  local ns = loadAddon(w)
+  ns.scan()
+  check("break-to-complete not equipped", #w.equipped == 0)
+  check("veto names the old set", w.printed[1]:find("would break Oldplate 4pc", 1) ~= nil)
+end
+
+-- 51. Completion respects the heirloom and level gates.
+do -- completing over an heirloom keeps the heirloom
+  local w = newWorld()
+  specReady(w)
+  local heir = "|cffa335ee|Hitem:920|h[Heirloom Helm]|h|r"
+  w.rarities[heir] = 7
+  w.equippedSlots[1] = heir
+  local t2, t3, t4 = tierPiece(w, 11), tierPiece(w, 11), tierPiece(w, 11)
+  w.equippedSlots[3], w.equippedSlots[5], w.equippedSlots[7] = t2, t3, t4
+  local cand = tierPiece(w, 11)
+  w.bags[0] = { cand }
+  w.slots[cand] = "INVTYPE_HEAD"
+  local ns = loadAddon(w)
+  ns.scan()
+  check("completion keeps heirloom", #w.equipped == 0)
+  check("heirloom announced", #w.printed == 1 and w.printed[1]:find("keeping heirloom", 1) ~= nil)
+end
+do -- above-level tier never completes
+  local w = newWorld()
+  specReady(w)
+  local t1, t2, t3 = tierPiece(w, 11), tierPiece(w, 11), tierPiece(w, 11)
+  w.equippedSlots[1], w.equippedSlots[3], w.equippedSlots[5] = t1, t2, t3
+  local cand = tierPiece(w, 11)
+  w.minLevels[cand] = 85
+  w.bags[0] = { cand }
+  w.slots[cand] = "INVTYPE_LEGS"
+  local ns = loadAddon(w)
+  ns.scan()
+  check("above-level completion skipped", #w.equipped == 0 and #w.printed == 0)
 end
 
 print("tests/run.lua: " .. passed .. " checks passed")
