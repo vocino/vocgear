@@ -22,6 +22,7 @@ local defaults = {
   autoTwoSlot = false,
   includeIlvl = true,
   keepHeirlooms = true,
+  protectSets = true,
   scale = "",
   sheetButton = true,
 }
@@ -185,6 +186,175 @@ function ns.announceWeaponKind(link, ev)
   end
 end
 
+-- Set bonus handling. Pawn scores pure stats and never values 2pc/4pc
+-- bonuses (verified: no set handling in Pawn 2.13.16), so an unguided
+-- equip can silently break an active bonus while a bonus-completing tier
+-- piece never surfaces. Sets are handled as a gate, not a weight: bonus
+-- value is spec- and bonus-specific, so no static number is right. With
+-- "Prioritize set bonuses" on, a bag piece that completes a bonus equips
+-- automatically, and anything that would break an active bonus is
+-- announced instead. Breaking a set yourself declines it for the
+-- session: VocGear leaves that set alone until you reload.
+--
+-- Detection (verified in Blizzard_APIDocumentationGenerated, branch live):
+-- C_Item.GetItemInfo's 16th return is the setID, C_Item.GetItemInfoInstant's
+-- 1st return is the base itemID, C_Item.GetSetBonusesForSpecializationByItemID
+-- lists the set's bonus spells for a spec (non-empty = worth protecting),
+-- and C_SpecializationInfo.GetSpecialization + GetSpecializationInfo
+-- resolve the current specID. Piece-count thresholds have no API, so the
+-- modern 2/4 layout is assumed: legacy sets with wider layouts are
+-- under-protected, never over-protected.
+ns.SET_THRESHOLDS = { 2, 4 }
+ns.setDeclined = {} -- setID -> true, per session
+
+-- Set membership of a link, or nil (not a set piece, or data uncached).
+-- Unknown reads as "no set action" (fail open, like the weapon gate).
+function ns.setID(link)
+  if not link then return nil end
+  local ok, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, setID = pcall(C_Item.GetItemInfo, link)
+  if not ok then return nil end
+  return setID
+end
+
+-- Current spec's ID, or nil when undetectable (fail open: no set logic).
+function ns.playerSpecID()
+  if type(C_SpecializationInfo) ~= "table" then return nil end
+  if type(C_SpecializationInfo.GetSpecialization) ~= "function" then return nil end
+  if type(C_SpecializationInfo.GetSpecializationInfo) ~= "function" then return nil end
+  local okIdx, idx = pcall(C_SpecializationInfo.GetSpecialization)
+  if not okIdx or type(idx) ~= "number" then return nil end
+  local okID, specID = pcall(C_SpecializationInfo.GetSpecializationInfo, idx)
+  if not okID or type(specID) ~= "number" or specID == 0 then return nil end
+  return specID
+end
+
+-- True when the link's set grants bonuses to the given spec. Anything
+-- unknown (no set, no itemID, API hiccup) reads as false: only confirmed
+-- bonus sets are protected or completed.
+function ns.setHasBonuses(link, specID)
+  if not link or type(specID) ~= "number" then return false end
+  if ns.setID(link) == nil then return false end
+  local itemID = C_Item.GetItemInfoInstant(link)
+  if type(itemID) ~= "number" then return false end
+  local ok, spells = pcall(C_Item.GetSetBonusesForSpecializationByItemID, specID, itemID)
+  return ok and type(spells) == "table" and #spells > 0
+end
+
+function ns.setName(setID)
+  local ok, name = pcall(C_Item.GetItemSetInfo, setID)
+  if ok and type(name) == "string" and name ~= "" then return name end
+  return nil
+end
+
+-- "Testplate 4pc", or just "4pc" when the set name is unavailable.
+function ns.bonusLabel(setID, threshold)
+  local name = setID and ns.setName(setID) or nil
+  if name then return name .. " " .. threshold .. "pc" end
+  return threshold .. "pc"
+end
+
+-- Equipped pieces per setID, from live slots or a snapshot.
+function ns.setCounts()
+  local counts = {}
+  for slotID = 1, 19 do
+    local id = ns.setID(GetInventoryItemLink("player", slotID))
+    if id then counts[id] = (counts[id] or 0) + 1 end
+  end
+  return counts
+end
+
+function ns.setCountsForSnap(snap)
+  local counts = {}
+  if snap then
+    for slotID = 1, 19 do
+      local id = ns.setID(snap[slotID])
+      if id then counts[id] = (counts[id] or 0) + 1 end
+    end
+  end
+  return counts
+end
+
+-- Per-scan set state, or nil when set logic is off or the spec is
+-- unknown (fail open: pure Pawn behavior).
+function ns.setContext()
+  if not ns.opts().protectSets then return nil end
+  local specID = ns.playerSpecID()
+  if not specID then return nil end
+  return { specID = specID, counts = ns.setCounts() }
+end
+
+-- Threshold (2/4) equipping link over held would break, plus the set;
+-- nil when nothing breaks. Same-set swaps change no count, and declined
+-- sets are left alone, so neither ever vetoes.
+function ns.setBreaks(ctx, link, held)
+  if not ctx or not held then return nil end
+  local heldSet = ns.setID(held)
+  if not heldSet or ns.setDeclined[heldSet] then return nil end
+  if ns.setID(link) == heldSet then return nil end
+  if not ns.setHasBonuses(held, ctx.specID) then return nil end
+  local n = ctx.counts[heldSet] or 0
+  for _, t in ipairs(ns.SET_THRESHOLDS) do
+    if n == t then return t, heldSet end
+  end
+  return nil
+end
+
+-- Candidate-level completion precheck (no held item needed): threshold
+-- and set when the link belongs to a protected set sitting exactly one
+-- piece below a bonus. The equip path confirms the swap actually adds a
+-- piece (same-set swaps don't).
+function ns.setCompletionReady(ctx, link)
+  if not ctx then return nil end
+  local candSet = ns.setID(link)
+  if not candSet or ns.setDeclined[candSet] then return nil end
+  if not ns.setHasBonuses(link, ctx.specID) then return nil end
+  local n = ctx.counts[candSet] or 0
+  for _, t in ipairs(ns.SET_THRESHOLDS) do
+    if n + 1 == t then
+      -- Level gate, same as evaluate's: above-level pieces never complete.
+      local okLvl, _, _, _, _, minLevel = pcall(C_Item.GetItemInfo, link)
+      if okLvl and minLevel and UnitLevel("player") < minLevel then return nil end
+      return t, candSet
+    end
+  end
+  return nil
+end
+
+-- A ready completion only fires when the swap adds a set piece.
+function ns.setSwapCompletes(held, readyThreshold, readySet)
+  if readyThreshold and ns.setID(held) ~= readySet then return readyThreshold end
+  return nil
+end
+
+-- Manual set changes are decisions: a downward threshold crossing (a
+-- bonus just broke) declines the set for the session, an upward one (a
+-- bonus just completed) clears the decline. Our own equips never cross
+-- downward (the veto forbids it), so any crossing seen here is the
+-- player's doing.
+function ns.trackSetCrossings(prevSnap, snap)
+  local before, after = ns.setCountsForSnap(prevSnap), ns.setCountsForSnap(snap)
+  local seen = {}
+  for id in pairs(before) do seen[id] = true end
+  for id in pairs(after) do seen[id] = true end
+  for id in pairs(seen) do
+    local b, a = before[id] or 0, after[id] or 0
+    if b ~= a then
+      for _, t in ipairs(ns.SET_THRESHOLDS) do
+        if b >= t and a < t then ns.setDeclined[id] = true end
+        if b < t and a >= t then ns.setDeclined[id] = nil end
+      end
+    end
+  end
+end
+
+function ns.announceSetBreak(link, breakSet, threshold)
+  local o = ns.opts()
+  if o.announce and not ns.flagged[link] then
+    ns.flagged[link] = true
+    ns.say("not equipping " .. link .. " (would break " .. ns.bonusLabel(breakSet, threshold) .. ")")
+  end
+end
+
 -- Which slot should a two-slot upgrade go into? Prefers the slot holding
 -- the item Pawn says it replaces; falls back to the empty or weaker slot.
 -- Returns a slot ID, or nil (can't resolve -> announce instead).
@@ -222,10 +392,12 @@ function ns.resolveTwoSlotSlot(equipLoc, ev, link)
 end
 
 function ns.why(ev)
-  if ev.ilvl then return " (item level +" .. tostring(ev.ilvlDiff or "?") .. ")" end
-  if ev.percent and ev.percent >= 100 then return " (big upgrade)" end
-  if ev.percent then return string.format(" (+%.1f%%)", ev.percent * 100) end
-  return ""
+  local base = ""
+  if ev.ilvl then base = " (item level +" .. tostring(ev.ilvlDiff or "?") .. ")"
+  elseif ev.percent and ev.percent >= 100 then base = " (big upgrade)"
+  elseif ev.percent then base = string.format(" (+%.1f%%)", ev.percent * 100) end
+  if ev.completes then base = base .. " (completes " .. ev.completes .. ")" end
+  return base
 end
 
 function ns.announce(link, ev)
@@ -306,6 +478,7 @@ function ns.trackSwaps()
       local prev, cur = ns.equippedSnap[slotID], snap[slotID]
       if cur ~= prev then ns.noteDisplacement(prev, cur, slotID, now) end
     end
+    ns.trackSetCrossings(ns.equippedSnap, snap)
   end
   ns.equippedSnap = snap
   ns.ourEquipPending = false
@@ -350,6 +523,7 @@ function ns.scan()
   if InCombatLockdown() then return end
   ns.trackSwaps()
   ns.scanning = true
+  local setCtx = ns.setContext()
   local unsure = false
   for bag = 0, NUM_BAG_SLOTS do
     for slot = 1, C_Container.GetContainerNumSlots(bag) do
@@ -361,29 +535,50 @@ function ns.scan()
         if not okEv or ev == nil then
           unsure = true
         -- Freshly displaced gear is left alone (loop guard), silently.
-        elseif ev.upgrade and not ns.recentSwap[link] then
-          local _, _, _, equipLoc = C_Item.GetItemInfoInstant(link)
-          local pair = equipLoc and ns.slotPairs[equipLoc]
-          if equipLoc == nil or (pair and not o.autoTwoSlot) then
-            ns.announce(link, ev)
-          elseif pair then
-            local slotID = ns.resolveTwoSlotSlot(equipLoc, ev, link)
-            local held = slotID and GetInventoryItemLink("player", slotID)
-            if slotID and o.keepHeirlooms and ns.isHeirloom(held) then
-              ns.announceHeirloom(link, held)
-            elseif slotID then
-              if ns.equip(link, ev, slotID) then ns.scanning = false return end
+        elseif not ns.recentSwap[link] then
+          -- Set completion can act on items Pawn doesn't flag; anything
+          -- else needs a Pawn verdict to proceed.
+          local readyThreshold, readySet = ns.setCompletionReady(setCtx, link)
+          if ev.upgrade or readyThreshold then
+            local _, _, _, equipLoc = C_Item.GetItemInfoInstant(link)
+            local pair = equipLoc and ns.slotPairs[equipLoc]
+            if equipLoc == nil or (pair and not o.autoTwoSlot) then
+              -- A completion that can't auto-equip stays silent: there is
+              -- no Pawn verdict behind it to report.
+              if ev.upgrade then ns.announce(link, ev) end
+            elseif pair then
+              local slotID = ns.resolveTwoSlotSlot(equipLoc, ev, link)
+              if not slotID then
+                if ev.upgrade then ns.announce(link, ev) end
+              else
+                local held = GetInventoryItemLink("player", slotID)
+                local breakThreshold, breakSet = ns.setBreaks(setCtx, link, held)
+                local completes = ns.setSwapCompletes(held, readyThreshold, readySet)
+                if o.keepHeirlooms and ns.isHeirloom(held) then
+                  ns.announceHeirloom(link, held)
+                elseif breakThreshold then
+                  ns.announceSetBreak(link, breakSet, breakThreshold)
+                elseif ev.upgrade or completes then
+                  if completes then ev.completes = ns.bonusLabel(readySet, completes) end
+                  if ns.equip(link, ev, slotID) then ns.scanning = false return end
+                end
+              end
             else
-              ns.announce(link, ev)
+              local slotID = equipLoc and ns.primarySlot[equipLoc]
+              local held = slotID and GetInventoryItemLink("player", slotID)
+              local breakThreshold, breakSet = ns.setBreaks(setCtx, link, held)
+              local completes = ns.setSwapCompletes(held, readyThreshold, readySet)
+              if o.keepHeirlooms and ns.isHeirloom(held) then
+                ns.announceHeirloom(link, held)
+              elseif ns.weaponKindCrosses(link, held) then
+                ns.announceWeaponKind(link, ev)
+              elseif breakThreshold then
+                ns.announceSetBreak(link, breakSet, breakThreshold)
+              elseif ev.upgrade or completes then
+                if completes then ev.completes = ns.bonusLabel(readySet, completes) end
+                if ns.equip(link, ev, nil) then ns.scanning = false return end
+              end
             end
-          else
-            local slotID = equipLoc and ns.primarySlot[equipLoc]
-            local held = slotID and GetInventoryItemLink("player", slotID)
-            if o.keepHeirlooms and ns.isHeirloom(held) then
-              ns.announceHeirloom(link, held)
-            elseif ns.weaponKindCrosses(link, held) then
-              ns.announceWeaponKind(link, ev)
-            elseif ns.equip(link, ev, nil) then ns.scanning = false return end
           end
         end
       end
@@ -445,6 +640,8 @@ function ns.ensureSettings()
     "Treat Pawn's item-level-only upgrades as upgrades too.")
   check("keepHeirlooms", "Don't replace heirlooms",
     "Keep equipped heirlooms even when something else scores higher.")
+  check("protectSets", "Prioritize set bonuses",
+    "Complete set bonuses automatically and never break an active one.")
   do
     local s = Settings.RegisterAddOnSetting(
       category, "VocGear_scale", "scale",
