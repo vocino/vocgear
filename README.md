@@ -53,6 +53,8 @@ Pawn names, the empty slot, or the weaker one, and are only announced
 unless you opt in. A loop guard leaves freshly displaced gear alone
 for 30 seconds and pauses auto-equip for a minute if the same slot
 flips three times, so two scales can never fight over one item.
+Weapon swaps that cross the melee/ranged line (a sword for a
+hunter's bow) are announced, never auto-equipped.
 
 ## What's inside
 

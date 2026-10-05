@@ -144,6 +144,47 @@ function ns.announceHeirloom(link, held)
   end
 end
 
+-- Weapon-kind gate. Bows, guns, and crossbows share main-hand slot 16
+-- with melee, and Pawn scores them together: it normalizes ranged to
+-- 2H (wands to MH 1H, Pawn 2.13.16 Pawn.lua:1423); the item-level path
+-- has no weapon check at all. A swap across the melee/ranged line can
+-- disable a whole action bar (BM hunter + sword), so VocGear
+-- announces those swaps and leaves them to the player, both ways.
+-- Unknown kinds fail open: an undetectable weapon still equips.
+-- Enum.ItemWeaponSubclass (ItemConstantsDocumentation, live 12.1.0).
+ns.RANGED_SUBCLASS = { [2] = true, [3] = true, [18] = true } -- Bows, Guns, Crossbow
+ns.WAND_SUBCLASS = 19 -- Enum.ItemWeaponSubclass.Wand, same source
+function ns.weaponKind(link)
+  if not link then return nil end
+  local _, _, _, equipLoc, _, classID, subclassID = C_Item.GetItemInfoInstant(link)
+  if equipLoc == "INVTYPE_RANGED" or equipLoc == "INVTYPE_RANGEDRIGHT" then
+    if subclassID == ns.WAND_SUBCLASS then return "melee" end -- wand: MH 1H, like Pawn
+    return "ranged"
+  end
+  if equipLoc == "INVTYPE_WEAPON" or equipLoc == "INVTYPE_WEAPONMAINHAND"
+      or equipLoc == "INVTYPE_WEAPONOFFHAND" or equipLoc == "INVTYPE_2HWEAPON"
+      or equipLoc == "INVTYPE_SHIELD" or equipLoc == "INVTYPE_HOLDABLE" then
+    if classID == 2 and ns.RANGED_SUBCLASS[subclassID] then return "ranged" end -- belt
+    return "melee"
+  end
+  return nil -- not a weapon
+end
+
+function ns.weaponKindCrosses(link, held)
+  if not held then return false end
+  local cand, cur = ns.weaponKind(link), ns.weaponKind(held)
+  if not cand or not cur then return false end
+  return cand ~= cur
+end
+
+function ns.announceWeaponKind(link, ev)
+  local o = ns.opts()
+  if o.announce and not ns.flagged[link] then
+    ns.flagged[link] = true
+    ns.say("Pawn upgrade in bags (melee/ranged swap, not auto-equipped): " .. link .. ns.why(ev))
+  end
+end
+
 -- Which slot should a two-slot upgrade go into? Prefers the slot holding
 -- the item Pawn says it replaces; falls back to the empty or weaker slot.
 -- Returns a slot ID, or nil (can't resolve -> announce instead).
@@ -340,6 +381,8 @@ function ns.scan()
             local held = slotID and GetInventoryItemLink("player", slotID)
             if o.keepHeirlooms and ns.isHeirloom(held) then
               ns.announceHeirloom(link, held)
+            elseif ns.weaponKindCrosses(link, held) then
+              ns.announceWeaponKind(link, ev)
             elseif ns.equip(link, ev, nil) then ns.scanning = false return end
           end
         end

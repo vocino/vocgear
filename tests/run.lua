@@ -30,7 +30,7 @@ local function loadAddon(world)
     end,
   }
   g.C_Item = {
-    GetItemInfoInstant = function(link) return nil, nil, nil, world.slots[link] end,
+    GetItemInfoInstant = function(link) return nil, nil, nil, world.slots[link], nil, world.classIDs[link], world.subclassIDs[link] end,
     GetItemInfo = function(link)
       return nil, nil, world.rarities[link], nil, world.minLevels[link]
     end,
@@ -174,7 +174,7 @@ local function loadAddon(world)
 end
 
 local function newWorld()
-  return { bags = {}, slots = {}, minLevels = {}, levels = {}, time = 1000,
+  return { bags = {}, slots = {}, minLevels = {}, levels = {}, classIDs = {}, subclassIDs = {}, time = 1000,
            equippedSlots = {}, equipped = {}, printed = {}, timers = {},
            inCombat = false, pawn = true, pawnNil = {}, upgradeLists = {},
            armorBest = {}, rarities = {},
@@ -952,10 +952,149 @@ do
   ns.scan()
   w.env.SlashCmdList.VOCGEAR("help")
   for _, leaked in ipairs({ "bag", "slot", "slotID", "link", "ev", "o", "s", "db",
-      "snap", "pair", "held", "btn", "now", "bar", "item", "line", "msg" }) do
+      "snap", "pair", "held", "btn", "now", "bar", "item", "line", "msg",
+      "cand", "cur", "equipLoc", "classID", "subclassID" }) do
     check("no leaked global: " .. leaked, w.env[leaked] == nil)
   end
   check("slash global registered", w.env.SLASH_VOCGEAR1 == "/vg")
+end
+
+-- 37. Melee/ranged swaps announce, never equip (hunter sword-over-bow).
+do
+  local w = newWorld()
+  local bow = "|cffa335ee|Hitem:900|h[Bow]|h|r"
+  local sword = "|cffa335ee|Hitem:901|h[Sword]|h|r"
+  local helm = "|cffa335ee|Hitem:902|h[Helm]|h|r"
+  w.slots[bow], w.slots[sword], w.slots[helm] =
+    "INVTYPE_RANGED", "INVTYPE_WEAPON", "INVTYPE_HEAD"
+  local ns = loadAddon(w)
+  check("bow reads ranged", ns.weaponKind(bow) == "ranged")
+  check("sword reads melee", ns.weaponKind(sword) == "melee")
+  check("armor reads nil", ns.weaponKind(helm) == nil)
+  check("nil reads nil", ns.weaponKind(nil) == nil)
+end
+do
+  local w = newWorld()
+  local bow = "|cffa335ee|Hitem:900|h[Bow]|h|r"
+  local sword = "|cffa335ee|Hitem:901|h[Sword]|h|r"
+  w.equippedSlots[16] = bow
+  w.slots[bow], w.slots[sword] = "INVTYPE_RANGED", "INVTYPE_WEAPON"
+  w.bags[0] = { sword }
+  w.upgradeLists[sword] = upgrade("A", 0.05)
+  local ns = loadAddon(w)
+  ns.scan()
+  ns.scan()
+  check("sword over bow not equipped", #w.equipped == 0)
+  check("sword over bow announced once", #w.printed == 1)
+  check("swap wording", w.printed[1]:find("melee/ranged swap", 1) ~= nil)
+end
+do -- symmetric: bow over sword announces too, never auto-swaps
+  local w = newWorld()
+  local sword = "|cffa335ee|Hitem:901|h[Sword]|h|r"
+  local bow = "|cffa335ee|Hitem:900|h[Bow]|h|r"
+  w.equippedSlots[16] = sword
+  w.slots[bow], w.slots[sword] = "INVTYPE_RANGED", "INVTYPE_WEAPON"
+  w.bags[0] = { bow }
+  w.upgradeLists[bow] = upgrade("A", 0.05)
+  local ns = loadAddon(w)
+  ns.scan()
+  check("bow over sword not equipped", #w.equipped == 0)
+  check("bow over sword announced", #w.printed == 1)
+end
+
+-- 38. Same-kind weapon upgrades still equip.
+do -- bow over bow
+  local w = newWorld()
+  local bowA = "|cff0070dd|Hitem:903|h[Bow A]|h|r"
+  local bowB = "|cffa335ee|Hitem:904|h[Bow B]|h|r"
+  w.equippedSlots[16] = bowA
+  w.slots[bowA], w.slots[bowB] = "INVTYPE_RANGED", "INVTYPE_RANGEDRIGHT"
+  w.bags[0] = { bowB }
+  w.upgradeLists[bowB] = upgrade("A", 0.05)
+  local ns = loadAddon(w)
+  ns.scan()
+  check("bow over bow equips", #w.equipped == 1)
+end
+do -- sword over sword
+  local w = newWorld()
+  local swA = "|cff0070dd|Hitem:905|h[Sword A]|h|r"
+  local swB = "|cffa335ee|Hitem:906|h[Sword B]|h|r"
+  w.equippedSlots[16] = swA
+  w.slots[swA], w.slots[swB] = "INVTYPE_WEAPONMAINHAND", "INVTYPE_WEAPON"
+  w.bags[0] = { swB }
+  w.upgradeLists[swB] = upgrade("A", 0.05)
+  local ns = loadAddon(w)
+  ns.scan()
+  check("sword over sword equips", #w.equipped == 1)
+end
+do -- 2H sword over bow: same Pawn handedness, still a swap
+  local w = newWorld()
+  local bow = "|cffa335ee|Hitem:900|h[Bow]|h|r"
+  local clay = "|cffa335ee|Hitem:907|h[Claymore]|h|r"
+  w.equippedSlots[16] = bow
+  w.slots[bow], w.slots[clay] = "INVTYPE_RANGED", "INVTYPE_2HWEAPON"
+  w.bags[0] = { clay }
+  w.upgradeLists[clay] = upgrade("A", 0.05)
+  local ns = loadAddon(w)
+  ns.scan()
+  check("2H sword over bow not equipped", #w.equipped == 0)
+  check("2H sword over bow announced", #w.printed == 1)
+end
+
+-- 39. Item-level path honors the guard too.
+do
+  local w = newWorld()
+  local bow = "|cffa335ee|Hitem:900|h[Bow]|h|r"
+  local sword = "|cffa335ee|Hitem:901|h[Sword]|h|r"
+  w.equippedSlots[16] = bow
+  w.slots[bow], w.slots[sword] = "INVTYPE_RANGED", "INVTYPE_WEAPON"
+  w.bags[0] = { sword }
+  w.upgradeLists[sword] = nil
+  w.ilvlDiffs[sword] = 5
+  local ns = loadAddon(w)
+  ns.scan()
+  check("ilvl sword over bow not equipped", #w.equipped == 0)
+  check("ilvl sword over bow announced", #w.printed == 1)
+end
+
+-- 40. Empty hand equips any weapon; armor ignores the guard.
+do
+  local w = newWorld()
+  local sword = "|cffa335ee|Hitem:901|h[Sword]|h|r"
+  w.bags[0] = { sword }
+  w.slots[sword] = "INVTYPE_WEAPON"
+  w.upgradeLists[sword] = upgrade("A", 0.05)
+  local ns = loadAddon(w)
+  ns.scan()
+  check("empty hand equips weapon", #w.equipped == 1)
+end
+do
+  local w = newWorld()
+  local bow = "|cffa335ee|Hitem:900|h[Bow]|h|r"
+  local helm = "|cffa335ee|Hitem:902|h[Helm]|h|r"
+  w.equippedSlots[16] = bow
+  w.slots[bow], w.slots[helm] = "INVTYPE_RANGED", "INVTYPE_HEAD"
+  w.bags[0] = { helm }
+  w.upgradeLists[helm] = upgrade("A", 0.05)
+  local ns = loadAddon(w)
+  ns.scan()
+  check("armor equips under a bow", #w.equipped == 1)
+end
+
+-- 41. Wand counts as main-hand 1H (Pawn normalizes it so), not ranged.
+do
+  local w = newWorld()
+  local sword = "|cff0070dd|Hitem:905|h[Sword A]|h|r"
+  local wand = "|cffa335ee|Hitem:908|h[Wand]|h|r"
+  w.equippedSlots[16] = sword
+  w.slots[sword], w.slots[wand] = "INVTYPE_WEAPON", "INVTYPE_RANGED"
+  w.classIDs[wand], w.subclassIDs[wand] = 2, 19
+  w.bags[0] = { wand }
+  w.upgradeLists[wand] = upgrade("A", 0.05)
+  local ns = loadAddon(w)
+  check("wand reads melee", ns.weaponKind(wand) == "melee")
+  ns.scan()
+  check("wand over sword equips", #w.equipped == 1)
 end
 
 print("tests/run.lua: " .. passed .. " checks passed")
