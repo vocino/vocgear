@@ -7,6 +7,8 @@
 ## SavedVariables: VocGearDB
 ## OptionalDeps: Pawn
 ## X-Website: https://github.com/vocino/vocgear
+## X-Curse-Project-ID: 1727452
+## X-Wago-ID: kNMPn0Gz
 ## X-License: MIT
 
 main.lua
