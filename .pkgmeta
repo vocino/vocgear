@@ -2,6 +2,8 @@ package-as: VocGear
 
 ignore:
   - .github
+  - .luacheckrc
   - tests
   - AGENTS.md
+  - FAMILY.md
   - VERSIONING.md
