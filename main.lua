@@ -20,9 +20,13 @@ local defaults = {
 }
 ns.defaults = defaults
 
+-- Corrupt SavedVariables (a non-table global, or a known key holding the
+-- wrong type) reset to defaults instead of erroring or misbehaving.
+-- Unknown keys are left alone for forward compatibility.
 function ns.opts()
+  if type(ns.db) ~= "table" then ns.db = {} VocGearDB = ns.db end
   for k, v in pairs(defaults) do
-    if ns.db[k] == nil then ns.db[k] = v end
+    if type(ns.db[k]) ~= type(v) then ns.db[k] = v end
   end
   return ns.db
 end
@@ -57,16 +61,20 @@ function ns.evaluate(link)
   local result = { upgrade = false, itemLevel = item.Level }
   local okUp, upgrades = pcall(_G.PawnIsItemAnUpgrade, item)
   if not okUp then return nil end
-  if upgrades then
+  if type(upgrades) == "table" then
     local bar = (o.minUpgradePct or 0) / 100
     for _, entry in ipairs(upgrades) do
-      local scaleOK = o.scale == nil or o.scale == "" or entry.ScaleName == o.scale
-      if scaleOK and entry.PercentUpgrade and entry.PercentUpgrade >= bar then
-        result.upgrade = true
-        if not result.percent or entry.PercentUpgrade > result.percent then
-          result.percent = entry.PercentUpgrade
-          result.existing = entry.ExistingItemLink
-          result.scaleName = entry.ScaleName
+      -- A non-table entry (Pawn drifted its return shape) is skipped:
+      -- malformed data must never abort the whole scan.
+      if type(entry) == "table" then
+        local scaleOK = o.scale == nil or o.scale == "" or entry.ScaleName == o.scale
+        if scaleOK and entry.PercentUpgrade and entry.PercentUpgrade >= bar then
+          result.upgrade = true
+          if not result.percent or entry.PercentUpgrade > result.percent then
+            result.percent = entry.PercentUpgrade
+            result.existing = entry.ExistingItemLink
+            result.scaleName = entry.ScaleName
+          end
         end
       end
     end
@@ -299,8 +307,10 @@ function ns.scan()
     for slot = 1, C_Container.GetContainerNumSlots(bag) do
       local link = C_Container.GetContainerItemLink(bag, slot)
       if link then
-        local ev = ns.evaluate(link)
-        if ev == nil then
+        -- Never let one bad item (or Pawn hiccup) abort the scan or wedge
+        -- ns.scanning on: failures read as "unsure" and retry later.
+        local okEv, ev = pcall(ns.evaluate, link)
+        if not okEv or ev == nil then
           unsure = true
         -- Freshly displaced gear is left alone (loop guard), silently.
         elseif ev.upgrade and not ns.recentSwap[link] then
@@ -372,7 +382,9 @@ function ns.ensureSettings()
     local rightLabel = MinimalSliderWithSteppersMixin
       and MinimalSliderWithSteppersMixin.Label
       and MinimalSliderWithSteppersMixin.Label.Right
-    if rightLabel then sliderOpts:SetLabelFormatter(rightLabel) end
+    if rightLabel and type(sliderOpts.SetLabelFormatter) == "function" then
+      sliderOpts:SetLabelFormatter(rightLabel)
+    end
     Settings.CreateSlider(category, s, sliderOpts,
       "Only act on upgrades at or above this Pawn margin (0 = everything Pawn flags).")
     ns.onSettingChanged(s, ns.scan)
@@ -403,9 +415,9 @@ function ns.scaleOptions()
   container:Add("", "Any visible scale", "Count an upgrade for any of Pawn's visible scales.")
   if ns.pawnReady() then
     local ok, scales = pcall(_G.PawnGetAllScalesEx)
-    if ok and scales then
+    if ok and type(scales) == "table" then
       for _, sc in ipairs(scales) do
-        if sc.IsVisible then
+        if type(sc) == "table" and sc.IsVisible and sc.Name then
           container:Add(sc.Name, sc.LocalizedName or sc.Name, "")
         end
       end
@@ -478,8 +490,16 @@ ns.frame:SetScript("OnEvent", function(_, event, arg1)
   if event == "ADDON_LOADED" then
     -- The client replaces the SavedVariables global with the loaded table
     -- after our file ran, so rebind or settings never persist.
-    if arg1 == name then ns.db = VocGearDB ns.ensureSettings() end
-    if arg1 == "Pawn" then ns.ensurePaperDollButton() end -- its button may just have appeared
+    if arg1 == name then
+      -- A corrupt SavedVariables global (wrong type) resets to defaults
+      -- instead of breaking every settings read for the session.
+      if type(VocGearDB) ~= "table" then VocGearDB = {} end
+      ns.db = VocGearDB ns.ensureSettings()
+    end
+    -- Cheap and idempotent, so run on every load: covers Pawn's button
+    -- appearing late and the lazy Blizzard character UI creating
+    -- PaperDollFrame after our own load events fired.
+    ns.ensurePaperDollButton()
     if arg1 ~= "Pawn" and arg1 ~= name then return end
   elseif event == "PLAYER_ENTERING_WORLD" then
     ns.ensureSettings() -- in case Settings wasn't up at ADDON_LOADED

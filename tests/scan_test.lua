@@ -131,8 +131,8 @@ local function loadAddon(world)
     end
     S.CreateCheckbox = function() world.settingsChecks = world.settingsChecks + 1 end
     S.CreateSliderOptions = function(min, max, step)
-      world.sliderOpts = { min = min, max = max, step = step,
-        SetLabelFormatter = function(_, f) world.sliderFormatter = f end }
+      world.sliderOpts = { min = min, max = max, step = step }
+      if not world.noSliderFormatter then world.sliderOpts.SetLabelFormatter = function(_, f) world.sliderFormatter = f end end
       return world.sliderOpts
     end
     g.MinimalSliderWithSteppersMixin = { Label = { Right = "RIGHT" } }
@@ -466,7 +466,7 @@ do
 end
 
 
--- 19. Settings panel-- 24. Settings panel registers all nine options.
+-- 19. Settings panel registers all nine options.
 do
   local w = newWorld()
   w.withSettings = true
@@ -799,6 +799,133 @@ do
   local pt = ns.sheetButton.point
   check("late Pawn re-anchors", pt[1] == "TOPRIGHT" and pt[3] == "TOPLEFT")
   check("late hook installs", w.hooks["PawnUI_InventoryPawnButton_Move"] ~= nil)
+end
+
+-- 31. Corrupt SavedVariables recover to defaults.
+do
+  local w = newWorld()
+  local ns = loadAddon(w)
+  w.env.VocGearDB = "corrupt" -- client restored garbage
+  w.frame.onEvent(nil, "ADDON_LOADED", "VocGear")
+  local o = ns.opts()
+  check("corrupt global replaced", type(w.env.VocGearDB) == "table")
+  check("corrupt global defaults", o.enabled == true and o.minUpgradePct == 0 and o.scale == "")
+  ns.db = 42 -- belt: a non-table db heals the same way
+  o = ns.opts()
+  check("non-table db healed", type(ns.db) == "table" and o.enabled == true)
+end
+do
+  local w = newWorld()
+  w.savedVars = { enabled = "yes", minUpgradePct = "high", scale = 42, audit = 1 }
+  local ns = loadAddon(w)
+  clientLoaded(w)
+  local o = ns.opts()
+  check("wrong-type enabled reset", o.enabled == true)
+  check("wrong-type threshold reset", o.minUpgradePct == 0)
+  check("wrong-type scale reset", o.scale == "")
+  check("wrong-type audit reset", o.audit == false)
+end
+
+-- 32. Malformed Pawn answers never wedge the scan.
+do
+  local w = newWorld()
+  local bad = "|cffa335ee|Hitem:800|h[Bad]|h|r"
+  local good = "|cffa335ee|Hitem:801|h[Good]|h|r"
+  w.bags[0] = { bad, good }
+  w.slots[bad], w.slots[good] = "INVTYPE_HEAD", "INVTYPE_HEAD"
+  w.upgradeLists[bad] = "not-a-table" -- Pawn drifted its return shape
+  w.upgradeLists[good] = upgrade("A", 0.05)
+  local ns = loadAddon(w)
+  ns.scan()
+  check("malformed entry skipped", #w.equipped == 1 and w.equipped[1].item == good)
+  check("scan not wedged", ns.scanning == false)
+  ns.scan()
+  check("second scan still runs", ns.scanning == false)
+end
+do
+  local w = newWorld()
+  local bad = "|cffa335ee|Hitem:802|h[Bad]|h|r"
+  w.bags[0] = { bad }
+  w.slots[bad] = "INVTYPE_HEAD"
+  w.upgradeLists[bad] = { "not-an-entry-table", 42 }
+  local ns = loadAddon(w)
+  ns.scan()
+  check("malformed entries skipped silently", #w.equipped == 0 and #w.printed == 0)
+  check("scan flag clear", ns.scanning == false)
+end
+do
+  local w = newWorld()
+  local link = "|cffa335ee|Hitem:803|h[Boom]|h|r"
+  w.bags[0] = { link }
+  w.slots[link] = "INVTYPE_HEAD"
+  local ns = loadAddon(w)
+  w.env.C_Item.GetItemInfo = function() error("api exploded") end
+  ns.scan()
+  check("evaluate error reads as unsure", #w.equipped == 0 and #w.timers == 1)
+  check("error does not wedge scan", ns.scanning == false)
+end
+
+-- 33. Scale dropdown tolerates malformed Pawn scale lists.
+do
+  local w = newWorld()
+  w.withSettings = true
+  w.scales = "garbage"
+  local ns = loadAddon(w)
+  clientLoaded(w)
+  local data = w.settingsDropdowns[1]()
+  check("non-table scales tolerated", #data == 1 and data[1].value == "")
+  _ = ns
+end
+do
+  local w = newWorld()
+  w.withSettings = true
+  w.scales = { "nope", { Name = "A", IsVisible = true }, { IsVisible = true } }
+  local ns = loadAddon(w)
+  clientLoaded(w)
+  local data = w.settingsDropdowns[1]()
+  check("malformed scale entries skipped", #data == 2 and data[2].value == "A")
+  _ = ns
+end
+
+-- 34. Sheet button appears when the character UI loads late.
+do
+  local w = newWorld()
+  local ns = loadAddon(w) -- no PaperDollFrame yet
+  w.frame.onEvent(nil, "PLAYER_ENTERING_WORLD")
+  check("no frame yet, no button", ns.sheetButton == nil)
+  w.env.PaperDollFrame = {} -- lazy Blizzard character UI arrives
+  w.frame.onEvent(nil, "ADDON_LOADED", "Blizzard_CharacterUI")
+  check("late character UI creates button", ns.sheetButton ~= nil)
+  check("late load does not scan", #w.equipped == 0 and #w.timers == 0)
+end
+
+-- 35. Settings build without slider label-formatter support.
+do
+  local w = newWorld()
+  w.withSettings = true
+  w.noSliderFormatter = true
+  local ns = loadAddon(w)
+  clientLoaded(w) -- would error on the unguarded method call
+  check("settings built without formatter", ns.settingsBuilt == true)
+  check("no formatter recorded", w.sliderFormatter == nil)
+end
+
+-- 36. Addon load and scans leak no globals.
+do
+  local w = newWorld()
+  local link = "|cffa335ee|Hitem:900|h[Helm]|h|r"
+  w.bags[0] = { link }
+  w.slots[link] = "INVTYPE_HEAD"
+  w.upgradeLists[link] = upgrade("A", 0.05)
+  local ns = loadAddon(w)
+  clientLoaded(w)
+  ns.scan()
+  for _, leaked in ipairs({ "bag", "slot", "link", "ev", "o", "s", "db",
+      "snap", "pair", "held", "btn", "now", "bar", "item" }) do
+    check("no leaked global: " .. leaked, w.env[leaked] == nil)
+  end
+  check("slash global registered", w.env.SLASH_VOCGEAR1 == "/vg")
+  _ = ns
 end
 
 print("scan_test.lua: " .. passed .. " checks passed")
