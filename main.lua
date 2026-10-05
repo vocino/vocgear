@@ -16,6 +16,7 @@ local defaults = {
   includeIlvl = true,
   keepHeirlooms = true,
   scale = "",
+  sheetButton = true,
 }
 ns.defaults = defaults
 
@@ -278,6 +279,13 @@ function ns.retrySoon()
   end)
 end
 
+-- Manual trigger: forget one-shot announces so the report is complete,
+-- then run the normal scan (audit/pause/threshold rules all apply).
+function ns.checkNow()
+  ns.flagged = {}
+  ns.scan()
+end
+
 function ns.scan()
   if ns.scanning then return end
   local o = ns.opts()
@@ -329,6 +337,14 @@ end
 
 -- Blizzard Settings panel (Settings > AddOns > VocGear). Built once, after
 -- SavedVariables land, and only if the Settings API is present.
+-- Re-evaluate when behavior settings change in the panel. Guarded: without
+-- setting callbacks the panel still works, just without auto-rescan.
+function ns.onSettingChanged(setting, fn)
+  if setting and type(setting.SetValueChangedCallback) == "function" then
+    setting:SetValueChangedCallback(fn)
+  end
+end
+
 ns.settingsBuilt = false
 function ns.ensureSettings()
   if ns.settingsBuilt then return end
@@ -337,10 +353,11 @@ function ns.ensureSettings()
   local category = Settings.RegisterVerticalLayoutCategory("VocGear")
   Settings.RegisterAddOnCategory(category)
   local db = ns.opts() -- bound, defaulted table
-  local function check(key, label, tooltip)
+  local function check(key, label, tooltip, onChange)
     local s = Settings.RegisterAddOnSetting(
       category, "VocGear_" .. key, key, db, type(defaults[key]), label, defaults[key])
     Settings.CreateCheckbox(category, s, tooltip)
+    ns.onSettingChanged(s, onChange or ns.scan)
   end
   check("enabled", "Enable auto-equip", "Equip Pawn-flagged upgrades out of combat.")
   check("announce", "Chat announcements", "Print a line when VocGear equips, picks, or advises.")
@@ -358,6 +375,7 @@ function ns.ensureSettings()
     if rightLabel then sliderOpts:SetLabelFormatter(rightLabel) end
     Settings.CreateSlider(category, s, sliderOpts,
       "Only act on upgrades at or above this Pawn margin (0 = everything Pawn flags).")
+    ns.onSettingChanged(s, ns.scan)
   end
   check("autoTwoSlot", "Auto-equip rings and trinkets",
     "Equip into the weaker of the pair instead of announcing.")
@@ -371,7 +389,11 @@ function ns.ensureSettings()
       db, type(defaults.scale), "Pawn scale", defaults.scale)
     Settings.CreateDropdown(category, s, ns.scaleOptions,
       "Which Pawn scale counts. Any visible scale preserves stock behavior.")
+    ns.onSettingChanged(s, ns.scan)
   end
+  check("sheetButton", "Character sheet button",
+    "Show a Check Bags button on the character sheet.",
+    function() ns.ensurePaperDollButton() end)
   ns.settingsBuilt = true
   ns.settingsCategory = category
 end
@@ -392,6 +414,29 @@ function ns.scaleOptions()
   return container:GetData()
 end
 
+ns.sheetButton = nil
+function ns.ensurePaperDollButton()
+  local o = ns.opts()
+  if ns.sheetButton then
+    ns.sheetButton:SetShown(o.sheetButton ~= false)
+    return
+  end
+  if PaperDollFrame == nil then return end
+  local btn = CreateFrame("Button", nil, PaperDollFrame, "UIPanelButtonTemplate")
+  btn:SetText("Check Bags")
+  btn:SetSize(110, 22)
+  btn:SetPoint("BOTTOM", PaperDollFrame, "BOTTOM", 0, 6)
+  btn:SetScript("OnClick", function() ns.checkNow() end)
+  btn:SetScript("OnEnter", function(self)
+    GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+    GameTooltip:SetText("Find best gear in bags (honors VocGear settings)")
+    GameTooltip:Show()
+  end)
+  btn:SetScript("OnLeave", function() GameTooltip:Hide() end)
+  btn:SetShown(o.sheetButton ~= false)
+  ns.sheetButton = btn
+end
+
 function ns.openConfig()
   local ok = pcall(function() Settings.OpenToCategory(ns.settingsCategory:GetID()) end)
   if not ok then print("VocGear: open Settings > AddOns > VocGear") end
@@ -410,6 +455,7 @@ ns.frame:SetScript("OnEvent", function(_, event, arg1)
     if arg1 ~= "Pawn" and arg1 ~= name then return end
   elseif event == "PLAYER_ENTERING_WORLD" then
     ns.ensureSettings() -- in case Settings wasn't up at ADDON_LOADED
+    ns.ensurePaperDollButton()
   end
   ns.scan()
 end)
@@ -425,6 +471,8 @@ SlashCmdList.VOCGEAR = function(msg)
     print("VocGear: announcements " .. (o.announce and "on" or "off"))
   elseif msg == "config" then
     ns.openConfig()
+  elseif msg == "scan" then
+    ns.checkNow()
   else
     o.enabled = not o.enabled
     print("VocGear: " .. (o.enabled and "on" or "off"))
