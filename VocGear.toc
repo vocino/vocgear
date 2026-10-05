@@ -3,12 +3,13 @@
 ## Notes: Equip what Pawn says is an upgrade. Out of combat only.
 ## Author: vocino
 ## Version: @project-version@
-## Category: Inventory
+## Category: Bags & Inventory
+## IconTexture: Interface\Icons\INV_Chest_Chain
 ## SavedVariables: VocGearDB
 ## RequiredDeps: Pawn
 ## X-Website: https://github.com/vocino/vocgear
+## X-License: MIT
 ## X-Curse-Project-ID: 1727452
 ## X-Wago-ID: kNMPn0Gz
-## X-License: MIT
 
 main.lua
