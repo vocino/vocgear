@@ -68,11 +68,24 @@ local function loadAddon(world)
     After = function(_, fn) world.timers[#world.timers + 1] = fn end,
   }
   g.SlashCmdList = {}
-  local frame = { events = {} }
-  frame.RegisterEvent = function(_, e) frame.events[e] = true end
-  frame.SetScript = function(_, _, fn) frame.onEvent = fn end
-  g.CreateFrame = function() return frame end
-  world.frame = frame
+  g.CreateFrame = function(ftype, _, _, template)
+    local f = { events = {}, scripts = {}, ctype = ftype, template = template }
+    f.RegisterEvent = function(_, e) f.events[e] = true end
+    f.SetScript = function(_, name, fn) f.scripts[name] = fn end
+    f.SetText = function(_, t) f.text = t end
+    f.SetSize = function(_, w, h) f.size = { w, h } end
+    f.SetPoint = function(_, ...) f.point = { ... } end
+    f.SetShown = function(_, s) f.shown = s end
+    world.frames[#world.frames + 1] = f
+    return f
+  end
+  g.GameTooltip = {
+    SetOwner = function() end,
+    SetText = function(_, t) world.gametip.text = t end,
+    Show = function() world.gametip.shown = true end,
+    Hide = function() world.gametip.shown = false end,
+  }
+  if world.withPaperDoll then g.PaperDollFrame = {} end
   -- Pawn stubs (nil them out to simulate Pawn missing/not ready).
   g.PawnGetItemData = world.pawn and
     function(link)
@@ -104,7 +117,9 @@ local function loadAddon(world)
       world.settingsReg[#world.settingsReg + 1] =
         { var = var, key = key, type = typ, label = label, default = default }
       if tbl[key] == nil then tbl[key] = default end
-      return {}
+      local s = {}
+      s.SetValueChangedCallback = function(_, fn) world.settingCallbacks[var] = fn end
+      return s
     end
     S.CreateCheckbox = function() world.settingsChecks = world.settingsChecks + 1 end
     S.CreateSliderOptions = function(min, max, step)
@@ -134,6 +149,10 @@ local function loadAddon(world)
   local chunk = assert(load(src, "@" .. mainPath, "t", g))
   local ns = {}
   chunk("VocGear", ns)
+  world.frame = world.frames[1] -- the event frame, created at load
+  world.frame.onEvent = function(...)
+    return world.frames[1].scripts.OnEvent(...)
+  end
   world.ns = ns
   world.env = g
   return ns
@@ -146,7 +165,8 @@ local function newWorld()
            armorBest = {}, rarities = {},
            ilvlDiffs = {}, scales = {}, savedVars = nil, playerLevel = 80,
            withSettings = false, settingsReg = {}, settingsChecks = 0,
-           settingsSliders = 0, settingsDropdowns = {} }
+           settingsSliders = 0, settingsDropdowns = {}, settingCallbacks = {},
+           frames = {}, gametip = {}, withPaperDoll = false }
 end
 
 -- Simulate the client deserializing SavedVariables (a FRESH table replaces
@@ -185,6 +205,7 @@ do
   check("default ilvl on", o.includeIlvl == true)
   check("default scale any", o.scale == "")
   check("default keepHeirlooms", o.keepHeirlooms == true)
+  check("default sheetButton", o.sheetButton == true)
 end
 
 -- 3. Single-slot upgrade equipped by full link, margin in the message.
@@ -436,7 +457,7 @@ do
 end
 
 
--- 19. Settings panel-- 24. Settings panel registers all eight options.
+-- 19. Settings panel-- 24. Settings panel registers all nine options.
 do
   local w = newWorld()
   w.withSettings = true
@@ -451,10 +472,10 @@ do
   local keys = {}
   for _, r in ipairs(w.settingsReg) do keys[r.key] = r end
   for _, k in ipairs({ "enabled", "announce", "audit", "minUpgradePct",
-      "autoTwoSlot", "includeIlvl", "keepHeirlooms", "scale" }) do
+      "autoTwoSlot", "includeIlvl", "keepHeirlooms", "scale", "sheetButton" }) do
     check("setting registered: " .. k, keys[k] ~= nil)
   end
-  check("six checkboxes", w.settingsChecks == 6)
+  check("seven checkboxes", w.settingsChecks == 7)
   check("one slider", w.settingsSliders == 1)
   check("slider range", w.sliderOpts.min == 0 and w.sliderOpts.max == 25
     and w.sliderOpts.step == 5)
@@ -463,6 +484,20 @@ do
   local scaleData = w.settingsDropdowns[1]()
   check("scale dropdown has Any + visible",
     #scaleData == 2 and scaleData[1].value == "" and scaleData[2].value == "A")
+  check("callbacks attached", (function()
+    for _, r in ipairs(w.settingsReg) do
+      if not w.settingCallbacks[r.var] then return false end
+    end
+    return #w.settingsReg == 9
+  end)())
+  local clink = "|cffa335ee|Hitem:710|h[Helm]|h|r"
+  w.bags[0] = { clink }
+  w.slots[clink] = "INVTYPE_HEAD"
+  w.upgradeLists[clink] = upgrade("A", 0.05)
+  w.settingCallbacks["VocGear_minUpgradePct"]()
+  check("setting callback rescans", #w.equipped == 1)
+  w.settingCallbacks["VocGear_sheetButton"]()
+  check("sheet callback safe without frame", ns.sheetButton == nil)
   check("built once", (function()
     local n = #w.settingsReg
     w.frame.onEvent(nil, "PLAYER_ENTERING_WORLD")
@@ -659,6 +694,69 @@ do
   ns.scan()
   check("two-slot heirloom not replaced", #w.equipped == 0)
   check("two-slot heirloom announced", #w.printed == 1)
+end
+
+-- 28. Manual trigger re-reports and /vg scan equips.
+do
+  local w = newWorld()
+  local r1 = "|cffa335ee|Hitem:777|h[Ring]|h|r"
+  w.bags[0] = { r1 }
+  w.slots[r1] = "INVTYPE_FINGER"
+  w.upgradeLists[r1] = upgrade("A", 0.05)
+  local ns = loadAddon(w)
+  ns.scan()
+  ns.scan()
+  check("announce consumed", #w.printed == 1)
+  ns.checkNow()
+  check("checkNow re-announces", #w.printed == 2)
+end
+do
+  local w = newWorld()
+  local link = "|cffa335ee|Hitem:701|h[Helm]|h|r"
+  w.bags[0] = { link }
+  w.slots[link] = "INVTYPE_HEAD"
+  w.upgradeLists[link] = upgrade("A", 0.05)
+  local ns = loadAddon(w)
+  w.env.SlashCmdList.VOCGEAR("scan")
+  check("/vg scan equips", #w.equipped == 1)
+  _ = ns
+end
+
+-- 29. Character-sheet button.
+do
+  local w = newWorld()
+  w.withPaperDoll = true
+  local ns = loadAddon(w)
+  w.frame.onEvent(nil, "PLAYER_ENTERING_WORLD")
+  check("button created", ns.sheetButton ~= nil)
+  check("button labeled", ns.sheetButton.text == "Check Bags")
+  check("button shown by default", ns.sheetButton.shown == true)
+  local link = "|cffa335ee|Hitem:701|h[Helm]|h|r"
+  w.bags[0] = { link }
+  w.slots[link] = "INVTYPE_HEAD"
+  w.upgradeLists[link] = upgrade("A", 0.05)
+  ns.sheetButton.scripts.OnClick()
+  check("button click scans", #w.equipped == 1)
+  ns.sheetButton.scripts.OnEnter(ns.sheetButton)
+  check("tooltip shows", w.gametip.shown == true)
+  check("tooltip text", (w.gametip.text or ""):find("best gear in bags", 1) ~= nil)
+  ns.sheetButton.scripts.OnLeave()
+  check("tooltip hides", w.gametip.shown == false)
+end
+do
+  local w = newWorld()
+  w.withPaperDoll = true
+  w.savedVars = { sheetButton = false }
+  local ns = loadAddon(w)
+  clientLoaded(w)
+  w.frame.onEvent(nil, "PLAYER_ENTERING_WORLD")
+  check("button hidden when disabled", ns.sheetButton.shown == false)
+end
+do
+  local w = newWorld()
+  local ns = loadAddon(w)
+  w.frame.onEvent(nil, "PLAYER_ENTERING_WORLD")
+  check("no frame, no button, no error", ns.sheetButton == nil)
 end
 
 print("scan_test.lua: " .. passed .. " checks passed")
