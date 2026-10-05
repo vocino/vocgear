@@ -36,6 +36,70 @@ identical in every Voc repository: change it in one, copy it to all.
    every look.
 7. **Headless tests, always green.** Behavior lives behind `ns.*`
    functions that stubbed WoW APIs can drive. No release ships red.
+8. **Current build, official source.** The API is what Blizzard's own
+   documentation says it is for the build in `## Interface:`, not what
+   a wiki remembers from an older patch. See Sources of truth.
+
+## Sources of truth
+
+The client API changes every patch, and most of the web describes an
+older one. Code targets the build named by `## Interface:` in the
+`.toc`, and every API fact is checked against that build, in this
+order:
+
+1. **Blizzard's own API documentation for the build.** In the
+   client, `/api` opens it (the `Blizzard_APIDocumentation` addon).
+   Outside the client, the same files are mirrored per branch at
+   https://github.com/Gethe/wow-ui-source under
+   `Interface/AddOns/Blizzard_APIDocumentationGenerated/`: `live` is
+   the current retail build, `ptr` and `beta` are what is coming.
+   Function names, namespaces, argument and return lists, and events
+   come from here and nowhere else.
+2. **Blizzard's UI source for the build**, same mirror: how Blizzard
+   itself calls the API, the templates and mixins we build on
+   (Settings, object pools, tooltips), and the `Blizzard_Deprecated*`
+   folders for what is leaving and what replaces it.
+3. **The Lua 5.1 reference manual**, https://www.lua.org/manual/5.1/.
+   The client runs Lua 5.1 in a sandbox: no `io`, `os`, `require`, or
+   `loadfile`, plus Blizzard additions such as `strtrim`, `wipe`, and
+   `tContains`. Nothing from Lua 5.2 or later (`goto`, `table.unpack`,
+   integer division) exists in the client.
+4. **https://warcraft.wiki.gg**, for prose and examples only, and only
+   after checking the page's patch note against the build. It is
+   community-maintained and usually current, but a signature there is
+   a lead to confirm in source 1, never the source.
+
+Not used, ever: Wowpedia (fandom.com), WoWWiki, forum threads, blog
+tutorials, and memory of what a function used to take. Tell-tale
+staleness: bare globals that now live in a `C_*` namespace
+(`GetItemInfo` is `C_Item.GetItemInfo`, `GetContainerItemInfo` is
+`C_Container.GetContainerItemInfo`, `GetAddOnMetadata` is
+`C_AddOns.GetAddOnMetadata`), `UIDropDownMenu` templates where
+native Settings controls exist, and return lists that have since
+gained or lost positions.
+
+How the rule holds without anyone watching:
+
+- `.luacheckrc` lists every WoW global the addon reads, and lint
+  fails on any other, so a stale name cannot ship by accident. A name
+  is added only after it is confirmed in source 1 for the current
+  build, and the commit says so.
+- Third-party addon APIs (Pawn, Syndicator, Auctionator, TSM, and so
+  on) are verified against that addon's current source, kept as a
+  local checkout under `.reference/` (gitignored), with the finding
+  written down in `.reference/<addon>-analysis.md` or a code comment
+  naming the version checked.
+- Anything that cannot be verified is presence-gated, `pcall`-guarded,
+  and covered by a stub test that pins the shape we assumed.
+- When `## Interface:` is bumped, the generated docs for the new build
+  are diffed against the old before any code changes.
+
+Local checkout and a lookup:
+
+```
+git clone --depth 1 --branch live https://github.com/Gethe/wow-ui-source .reference/wow-ui-source
+grep -rn 'Name = "GetContainerItemInfo"' .reference/wow-ui-source/Interface/AddOns/Blizzard_APIDocumentationGenerated/
+```
 
 ## Naming
 
@@ -170,8 +234,9 @@ Siblings: [VocWarbank](https://github.com/vocino/vocwarbank) ·
 [VocGear](https://github.com/vocino/vocgear)
 ```
 
-`AGENTS.md` sections: Code Map, Family (pointer to this file),
-Namespace, Tests, Releases, Live testing.
+`AGENTS.md` sections: Code Map, API references (the short form of
+Sources of truth, since agents read `AGENTS.md` first), Family
+(pointer to this file), Namespace, Tests, Releases, Live testing.
 
 ## Adding an addon
 
