@@ -5,7 +5,7 @@
 ## Version: @project-version@
 ## Category: Inventory
 ## SavedVariables: VocGearDB
-## OptionalDeps: Pawn
+## RequiredDeps: Pawn
 ## X-Website: https://github.com/vocino/vocgear
 ## X-Curse-Project-ID: 1727452
 ## X-Wago-ID: kNMPn0Gz
