@@ -988,7 +988,7 @@ do
       "setCtx", "readyThreshold", "readySet", "breakThreshold", "breakSet",
       "completes", "candSet", "heldSet", "counts", "before", "after", "seen",
       "spells", "specID", "itemID", "setID", "ctx", "threshold",
-      "okIdx", "okID", "idx" }) do
+      "okIdx", "okID", "idx", "label" }) do
     check("no leaked global: " .. leaked, w.env[leaked] == nil)
   end
   check("slash global registered", w.env.SLASH_VOCGEAR1 == "/vg")

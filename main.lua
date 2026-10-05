@@ -241,15 +241,15 @@ function ns.setHasBonuses(link, specID)
 end
 
 function ns.setName(setID)
-  local ok, name = pcall(C_Item.GetItemSetInfo, setID)
-  if ok and type(name) == "string" and name ~= "" then return name end
+  local ok, label = pcall(C_Item.GetItemSetInfo, setID)
+  if ok and type(label) == "string" and label ~= "" then return label end
   return nil
 end
 
 -- "Testplate 4pc", or just "4pc" when the set name is unavailable.
 function ns.bonusLabel(setID, threshold)
-  local name = setID and ns.setName(setID) or nil
-  if name then return name .. " " .. threshold .. "pc" end
+  local label = setID and ns.setName(setID) or nil
+  if label then return label .. " " .. threshold .. "pc" end
   return threshold .. "pc"
 end
 
