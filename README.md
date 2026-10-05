@@ -3,8 +3,8 @@
 ## Problem
 
 Pawn tells you what's an upgrade but won't act on it. VocGear
-is the muscle: equip upgrades, pick quest rewards, and advise
-loot rolls, all from Pawn's verdicts - out of combat.
+is the muscle: equip what Pawn flags, out of combat,
+with a small panel of rules to tune it.
 
 ## Use
 
@@ -15,10 +15,14 @@ handles the rest, so valuations stay correct as gear changes.
 Rings and trinkets are announced by default; enable auto-equip
 for them and VocGear takes the weaker slot.
 
+A Check Bags button on the character sheet (or `/vg scan`)
+re-runs the check on demand; changing options rescans too.
+
 ```
 /vg          toggle on/off
 /vg announce toggle chat lines
 /vg config   open Settings > AddOns > VocGear
+/vg scan     check bags now
 ```
 
 ## Config
@@ -31,6 +35,7 @@ Settings > AddOns > VocGear, or `/vg config`:
 - Include item-level upgrades (default on)
 - Don't replace heirlooms (default on)
 - Pawn scale picker (default any visible scale)
+- Character sheet button (default on)
 
 ## What's inside
 
