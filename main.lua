@@ -4,6 +4,13 @@ local name, ns = ...
 VocGearDB = VocGearDB or {}
 ns.db = VocGearDB
 
+-- Chat voice shared by every Voc addon (see FAMILY.md): one line, the
+-- addon name as a colored prefix, then the message.
+ns.PREFIX_COLOR = "ff66ccff"
+function ns.say(msg)
+  print("|c" .. ns.PREFIX_COLOR .. name .. "|r: " .. tostring(msg))
+end
+
 -- Defaults. minUpgradePct is a percent in 5s; 0 accepts every Pawn
 -- verdict (Pawn's own ~0.5% bar still applies upstream).
 -- scale "" means any visible Pawn scale.
@@ -133,7 +140,7 @@ function ns.announceHeirloom(link, held)
   local o = ns.opts()
   if o.announce and not ns.flagged[link] then
     ns.flagged[link] = true
-    print("VocGear: keeping heirloom " .. held .. " (" .. link .. " is an upgrade)")
+    ns.say("keeping heirloom " .. held .. " (" .. link .. " is an upgrade)")
   end
 end
 
@@ -184,7 +191,7 @@ function ns.announce(link, ev)
   local o = ns.opts()
   if o.announce and not ns.flagged[link] then
     ns.flagged[link] = true
-    print("VocGear: Pawn upgrade in bags (not auto-equipped): " .. link .. ns.why(ev))
+    ns.say("Pawn upgrade in bags (not auto-equipped): " .. link .. ns.why(ev))
   end
 end
 
@@ -196,13 +203,13 @@ function ns.equip(link, ev, slotID)
     if o.announce and not ns.flagged[link] then
       ns.flagged[link] = true
       local reason = paused and " (paused: loop guard)" or " (audit mode)"
-      print("VocGear: would equip " .. link .. ns.why(ev) .. reason)
+      ns.say("would equip " .. link .. ns.why(ev) .. reason)
     end
     return false
   end
   ns.ourEquipPending = true
   if slotID then EquipItemByName(link, slotID) else EquipItemByName(link) end
-  if o.announce then print("VocGear: equipped " .. link .. ns.why(ev)) end
+  if o.announce then ns.say("equipped " .. link .. ns.why(ev)) end
   return true
 end
 
@@ -244,7 +251,7 @@ function ns.noteDisplacement(prevLink, newLink, slotID, now)
     if #fresh >= ns.BREAKER_TRIPS then
       ns.pausedUntil = now + ns.BREAKER_PAUSE
       if ns.opts().announce then
-        print("VocGear: equip loop detected, auto-equip paused 60s (/vg twice to resume now)")
+        ns.say("equip loop detected, auto-equip paused 60s (/vg on resumes now)")
       end
     end
   end
@@ -329,8 +336,8 @@ function ns.scan()
               ns.announce(link, ev)
             end
           else
-            local slot = equipLoc and ns.primarySlot[equipLoc]
-            local held = slot and GetInventoryItemLink("player", slot)
+            local slotID = equipLoc and ns.primarySlot[equipLoc]
+            local held = slotID and GetInventoryItemLink("player", slotID)
             if o.keepHeirlooms and ns.isHeirloom(held) then
               ns.announceHeirloom(link, held)
             elseif ns.equip(link, ev, nil) then ns.scanning = false return end
@@ -478,7 +485,7 @@ end
 
 function ns.openConfig()
   local ok = pcall(function() Settings.OpenToCategory(ns.settingsCategory:GetID()) end)
-  if not ok then print("VocGear: open Settings > AddOns > VocGear") end
+  if not ok then ns.say("open Settings > AddOns > VocGear") end
 end
 
 ns.frame = CreateFrame("Frame")
@@ -508,22 +515,50 @@ ns.frame:SetScript("OnEvent", function(_, event, arg1)
   ns.scan()
 end)
 
--- Blizzard's slash dispatcher reads SLASH_* globals by name, so this
--- cannot be namespaced; the explicit _G marks it as deliberate.
-_G.SLASH_VOCGEAR1 = "/vg"
+-- Slash grammar shared by every Voc addon (FAMILY.md): the bare command
+-- does the one main thing, `config` opens the panel, `help` lists the
+-- rest, and anything unrecognized prints help instead of acting.
+ns.HELP = {
+  "/vg            toggle auto-equip on/off",
+  "/vg on|off     set auto-equip explicitly",
+  "/vg scan       check bags now",
+  "/vg announce   toggle chat announcements",
+  "/vg config     open Settings > AddOns > VocGear",
+  "/vg help       this list (/vocgear works too)",
+}
+
+function ns.help()
+  ns.say("commands")
+  for _, line in ipairs(ns.HELP) do print("  " .. line) end
+end
+
+-- Toggle or set auto-equip; re-enabling clears the loop guard.
+function ns.setEnabled(on)
+  local o = ns.opts()
+  o.enabled = on
+  ns.say("auto-equip " .. (on and "on" or "off"))
+  if on then ns.clearGuard() ns.scan() end
+end
+
+-- Blizzard's slash dispatcher reads SLASH_* globals by name, so these
+-- cannot be namespaced (they are declared in .luacheckrc instead).
+SLASH_VOCGEAR1 = "/vg"
+SLASH_VOCGEAR2 = "/vocgear"
 SlashCmdList.VOCGEAR = function(msg)
   local o = ns.opts()
   msg = strtrim(msg or ""):lower()
-  if msg == "announce" then
+  if msg == "" then
+    ns.setEnabled(not o.enabled)
+  elseif msg == "on" or msg == "off" then
+    ns.setEnabled(msg == "on")
+  elseif msg == "announce" then
     o.announce = not o.announce
-    print("VocGear: announcements " .. (o.announce and "on" or "off"))
+    ns.say("announcements " .. (o.announce and "on" or "off"))
   elseif msg == "config" then
     ns.openConfig()
   elseif msg == "scan" then
     ns.checkNow()
   else
-    o.enabled = not o.enabled
-    print("VocGear: " .. (o.enabled and "on" or "off"))
-    if o.enabled then ns.clearGuard() ns.scan() end
+    ns.help()
   end
 end

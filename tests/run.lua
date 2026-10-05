@@ -1,5 +1,6 @@
 -- VocGear regression tests. Stub-harness: no WoW client needed.
--- Run from anywhere:  lua tests/scan_test.lua   (repo root also fine)
+-- Run from anywhere:  lua tests/run.lua   (repo root also fine)
+-- Works on Lua 5.1 (the client's dialect) and 5.2+.
 --
 -- Convention: each test resets stubs, drives ns.* or the frame's OnEvent
 -- handler, and asserts. Any failed assert aborts with the test name.
@@ -153,8 +154,14 @@ local function loadAddon(world)
   local f = assert(io.open(mainPath, "r"))
   local src = f:read("*a")
   f:close()
-  -- Fourth-arg env works on 5.2+; main.lua itself stays 5.1-clean for WoW.
-  local chunk = assert(load(src, "@" .. mainPath, "t", g))
+  -- 5.1 sandboxes with setfenv; 5.2+ takes the env as load's 4th arg.
+  local chunk
+  if setfenv then
+    chunk = assert(loadstring(src, "@" .. mainPath))
+    setfenv(chunk, g)
+  else
+    chunk = assert(load(src, "@" .. mainPath, "t", g))
+  end
   local ns = {}
   chunk("VocGear", ns)
   world.frame = world.frames[1] -- the event frame, created at load
@@ -514,20 +521,43 @@ do
   end)())
 end
 
--- 20. Slash commands: toggle, announce, config hint.
+-- 20. Slash commands: toggle, on/off, announce, config hint, help.
 do
   local w = newWorld()
   local ns = loadAddon(w)
   clientLoaded(w)
   w.env.SlashCmdList.VOCGEAR("")
   check("/vg toggles off", ns.opts().enabled == false)
+  check("/vg says so", w.printed[#w.printed]:find("auto%-equip off", 1) ~= nil)
+  w.env.SlashCmdList.VOCGEAR(" ON ")
+  check("/vg on sets explicitly", ns.opts().enabled == true)
+  w.env.SlashCmdList.VOCGEAR("off")
+  check("/vg off sets explicitly", ns.opts().enabled == false)
   w.env.SlashCmdList.VOCGEAR("announce")
   check("/vg announce toggles", ns.opts().announce == false)
   w.env.SlashCmdList.VOCGEAR("config")
   check("/vg config prints hint without Settings",
     w.printed[#w.printed]:find("Settings > AddOns", 1) ~= nil)
-  check("only /vg registered",
-    w.env.SLASH_VOCGEAR1 == "/vg" and w.env.SLASH_VOCGEAR2 == nil)
+  local before = #w.printed
+  w.env.SlashCmdList.VOCGEAR("confg") -- typo: help, never a toggle
+  check("unknown subcommand prints help", #w.printed == before + 1 + #ns.HELP)
+  check("unknown subcommand never toggles", ns.opts().enabled == false)
+  before = #w.printed
+  w.env.SlashCmdList.VOCGEAR("help")
+  check("/vg help lists every command", #w.printed == before + 1 + #ns.HELP)
+  check("short and long slash registered",
+    w.env.SLASH_VOCGEAR1 == "/vg" and w.env.SLASH_VOCGEAR2 == "/vocgear"
+    and w.env.SLASH_VOCGEAR3 == nil)
+end
+
+-- 20b. Chat voice: colored addon prefix, then the message.
+do
+  local w = newWorld()
+  local ns = loadAddon(w)
+  ns.say("hello")
+  check("say prefixes the addon name",
+    w.printed[1] == "|c" .. ns.PREFIX_COLOR .. "VocGear|r: hello")
+  check("family prefix color", ns.PREFIX_COLOR == "ff66ccff")
 end
 
 -- 21. Swap memory breaks A<->B ping-pong, then expires.
@@ -604,7 +634,7 @@ do
   check("manual swaps don't pause", not ns.isPaused())
 end
 
--- 25. Re-enabling clears the guard (/vg twice resumes now).
+-- 25. Re-enabling clears the guard (/vg twice, or /vg on, resumes now).
 do
   local w = newWorld()
   local ns = loadAddon(w)
@@ -615,6 +645,9 @@ do
   w.env.SlashCmdList.VOCGEAR("")
   check("re-enable clears pause", not ns.isPaused())
   check("re-enable clears memory", next(ns.recentSwap) == nil)
+  ns.pausedUntil = w.time + 60
+  w.env.SlashCmdList.VOCGEAR("on") -- already on: still a resume
+  check("/vg on clears pause while enabled", not ns.isPaused())
 end
 
 -- 26. Wrong armor type: item-level upgrades skipped, score path trusts Pawn.
@@ -725,10 +758,9 @@ do
   w.bags[0] = { link }
   w.slots[link] = "INVTYPE_HEAD"
   w.upgradeLists[link] = upgrade("A", 0.05)
-  local ns = loadAddon(w)
+  loadAddon(w)
   w.env.SlashCmdList.VOCGEAR("scan")
   check("/vg scan equips", #w.equipped == 1)
-  _ = ns
 end
 
 -- 29. Character-sheet button.
@@ -870,21 +902,19 @@ do
   local w = newWorld()
   w.withSettings = true
   w.scales = "garbage"
-  local ns = loadAddon(w)
+  loadAddon(w)
   clientLoaded(w)
   local data = w.settingsDropdowns[1]()
   check("non-table scales tolerated", #data == 1 and data[1].value == "")
-  _ = ns
 end
 do
   local w = newWorld()
   w.withSettings = true
   w.scales = { "nope", { Name = "A", IsVisible = true }, { IsVisible = true } }
-  local ns = loadAddon(w)
+  loadAddon(w)
   clientLoaded(w)
   local data = w.settingsDropdowns[1]()
   check("malformed scale entries skipped", #data == 2 and data[2].value == "A")
-  _ = ns
 end
 
 -- 34. Sheet button appears when the character UI loads late.
@@ -920,12 +950,12 @@ do
   local ns = loadAddon(w)
   clientLoaded(w)
   ns.scan()
-  for _, leaked in ipairs({ "bag", "slot", "link", "ev", "o", "s", "db",
-      "snap", "pair", "held", "btn", "now", "bar", "item" }) do
+  w.env.SlashCmdList.VOCGEAR("help")
+  for _, leaked in ipairs({ "bag", "slot", "slotID", "link", "ev", "o", "s", "db",
+      "snap", "pair", "held", "btn", "now", "bar", "item", "line", "msg" }) do
     check("no leaked global: " .. leaked, w.env[leaked] == nil)
   end
   check("slash global registered", w.env.SLASH_VOCGEAR1 == "/vg")
-  _ = ns
 end
 
-print("scan_test.lua: " .. passed .. " checks passed")
+print("tests/run.lua: " .. passed .. " checks passed")
