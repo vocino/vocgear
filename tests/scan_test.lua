@@ -75,6 +75,7 @@ local function loadAddon(world)
     f.SetText = function(_, t) f.text = t end
     f.SetSize = function(_, w, h) f.size = { w, h } end
     f.SetPoint = function(_, ...) f.point = { ... } end
+    f.ClearAllPoints = function() f.point = nil end
     f.SetShown = function(_, s) f.shown = s end
     world.frames[#world.frames + 1] = f
     return f
@@ -86,6 +87,13 @@ local function loadAddon(world)
     Hide = function() world.gametip.shown = false end,
   }
   if world.withPaperDoll then g.PaperDollFrame = {} end
+  g.hooksecurefunc = function(fname, fn) world.hooks[fname] = fn end
+  if world.pawnBtn then
+    g.PawnUI_InventoryPawnButton = {
+      GetPoint = function() return world.pawnBtn.point end,
+    }
+    g.PawnUI_InventoryPawnButton_Move = function() end
+  end
   -- Pawn stubs (nil them out to simulate Pawn missing/not ready).
   g.PawnGetItemData = world.pawn and
     function(link)
@@ -166,7 +174,8 @@ local function newWorld()
            ilvlDiffs = {}, scales = {}, savedVars = nil, playerLevel = 80,
            withSettings = false, settingsReg = {}, settingsChecks = 0,
            settingsSliders = 0, settingsDropdowns = {}, settingCallbacks = {},
-           frames = {}, gametip = {}, withPaperDoll = false }
+           frames = {}, gametip = {}, withPaperDoll = false,
+           hooks = {}, pawnBtn = nil }
 end
 
 -- Simulate the client deserializing SavedVariables (a FRESH table replaces
@@ -757,6 +766,39 @@ do
   local ns = loadAddon(w)
   w.frame.onEvent(nil, "PLAYER_ENTERING_WORLD")
   check("no frame, no button, no error", ns.sheetButton == nil)
+end
+
+
+-- 30. Sheet button sits next to Pawn's button.
+do
+  local w = newWorld()
+  w.withPaperDoll = true
+  w.pawnBtn = { point = "TOPRIGHT" } -- Pawn on the right, below trinket
+  local ns = loadAddon(w)
+  w.frame.onEvent(nil, "PLAYER_ENTERING_WORLD")
+  local pt = ns.sheetButton.point
+  check("right-side Pawn: ours goes left",
+    pt[1] == "TOPRIGHT" and pt[3] == "TOPLEFT" and pt[4] == -2)
+  check("hook installed", w.hooks["PawnUI_InventoryPawnButton_Move"] ~= nil)
+  check("matched height", ns.sheetButton.size[2] == 24)
+  w.pawnBtn.point = "TOPLEFT" -- user moves Pawn left; hook re-places us
+  w.hooks["PawnUI_InventoryPawnButton_Move"]()
+  pt = ns.sheetButton.point
+  check("left-side Pawn: ours goes right",
+    pt[1] == "TOPLEFT" and pt[3] == "TOPRIGHT" and pt[4] == 2)
+end
+do
+  local w = newWorld()
+  w.withPaperDoll = true
+  local ns = loadAddon(w)
+  w.frame.onEvent(nil, "PLAYER_ENTERING_WORLD")
+  check("no Pawn: sheet-bottom fallback", ns.sheetButton.point[1] == "BOTTOM")
+  w.env.PawnUI_InventoryPawnButton = { GetPoint = function() return "TOPRIGHT" end }
+  w.env.PawnUI_InventoryPawnButton_Move = function() end
+  w.frame.onEvent(nil, "ADDON_LOADED", "Pawn")
+  local pt = ns.sheetButton.point
+  check("late Pawn re-anchors", pt[1] == "TOPRIGHT" and pt[3] == "TOPLEFT")
+  check("late hook installs", w.hooks["PawnUI_InventoryPawnButton_Move"] ~= nil)
 end
 
 print("scan_test.lua: " .. passed .. " checks passed")

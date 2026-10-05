@@ -414,18 +414,43 @@ function ns.scaleOptions()
   return container:GetData()
 end
 
+-- Sit next to Pawn's sheet button (same template family, matched height),
+-- following whichever side Pawn is on. Falls back to the sheet bottom.
+function ns.placeSheetButton()
+  local btn = ns.sheetButton
+  if not btn then return end
+  btn:ClearAllPoints()
+  local pawnBtn = _G.PawnUI_InventoryPawnButton
+  local point = pawnBtn and pawnBtn:GetPoint()
+  if point == "TOPLEFT" then
+    btn:SetPoint("TOPLEFT", pawnBtn, "TOPRIGHT", 2, 0)
+  elseif pawnBtn then
+    btn:SetPoint("TOPRIGHT", pawnBtn, "TOPLEFT", -2, 0)
+  else
+    btn:SetPoint("BOTTOM", PaperDollFrame, "BOTTOM", 0, 6)
+  end
+end
+
+function ns.hookPawnButton()
+  if ns.pawnMoveHooked then return end
+  if type(_G.PawnUI_InventoryPawnButton_Move) ~= "function" then return end
+  ns.pawnMoveHooked = true
+  hooksecurefunc("PawnUI_InventoryPawnButton_Move", function() ns.placeSheetButton() end)
+end
+
 ns.sheetButton = nil
 function ns.ensurePaperDollButton()
   local o = ns.opts()
   if ns.sheetButton then
     ns.sheetButton:SetShown(o.sheetButton ~= false)
+    ns.placeSheetButton()
+    ns.hookPawnButton()
     return
   end
   if PaperDollFrame == nil then return end
   local btn = CreateFrame("Button", nil, PaperDollFrame, "UIPanelButtonTemplate")
   btn:SetText("Check Bags")
-  btn:SetSize(110, 22)
-  btn:SetPoint("BOTTOM", PaperDollFrame, "BOTTOM", 0, 6)
+  btn:SetSize(110, 24)
   btn:SetScript("OnClick", function() ns.checkNow() end)
   btn:SetScript("OnEnter", function(self)
     GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
@@ -435,6 +460,8 @@ function ns.ensurePaperDollButton()
   btn:SetScript("OnLeave", function() GameTooltip:Hide() end)
   btn:SetShown(o.sheetButton ~= false)
   ns.sheetButton = btn
+  ns.placeSheetButton()
+  ns.hookPawnButton()
 end
 
 function ns.openConfig()
@@ -452,6 +479,7 @@ ns.frame:SetScript("OnEvent", function(_, event, arg1)
     -- The client replaces the SavedVariables global with the loaded table
     -- after our file ran, so rebind or settings never persist.
     if arg1 == name then ns.db = VocGearDB ns.ensureSettings() end
+    if arg1 == "Pawn" then ns.ensurePaperDollButton() end -- its button may just have appeared
     if arg1 ~= "Pawn" and arg1 ~= name then return end
   elseif event == "PLAYER_ENTERING_WORLD" then
     ns.ensureSettings() -- in case Settings wasn't up at ADDON_LOADED
