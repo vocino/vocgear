@@ -47,3 +47,7 @@ lua tests/scan_test.lua
 ## License
 
 MIT
+
+---
+
+Part of the Voc family: tiny addons that do one job.
