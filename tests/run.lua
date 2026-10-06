@@ -48,6 +48,7 @@ local function loadAddon(world)
   }
   g.UnitLevel = function() return world.playerLevel end
   g.UnitClass = function() return "Warrior", world.playerClass or "WARRIOR" end
+  g.PlaySound = function(id) world.playedSounds[#world.playedSounds + 1] = id end
   g.IsAddOnLoaded = function(n) return world.loadedAddons and world.loadedAddons[n] or nil end
   g.GetAddOnInfo = function(n)
     local a = world.installedAddons and world.installedAddons[n]
@@ -211,7 +212,8 @@ local function newWorld()
            settingsSliders = 0, settingsDropdowns = {}, settingCallbacks = {},
            frames = {}, gametip = {}, withPaperDoll = false,
            hooks = {}, pawnBtn = nil, playerClass = nil,
-           loadedAddons = nil, installedAddons = nil, headerNotes = {} }
+           loadedAddons = nil, installedAddons = nil, headerNotes = {},
+           playedSounds = {} }
 end
 
 -- Simulate the client deserializing SavedVariables (a FRESH table replaces
@@ -270,6 +272,7 @@ do
   check("default keepHeirlooms", o.keepHeirlooms == true)
   check("default sheetButton", o.sheetButton == true)
   check("default protectSets", o.protectSets == true)
+  check("default equipSound quest chime", o.equipSound == "878")
 end
 
 -- 3. Single-slot upgrade equipped by full link, margin in the message.
@@ -546,15 +549,18 @@ do
   check("slider range", w.sliderOpts.min == 0 and w.sliderOpts.max == 25
     and w.sliderOpts.step == 5)
   check("slider value label", w.sliderFormatter == "RIGHT")
-  check("one dropdown", #w.settingsDropdowns == 1)
+  check("two dropdowns", #w.settingsDropdowns == 2)
   local scaleData = w.settingsDropdowns[1]()
   check("scale dropdown has Any + visible",
     #scaleData == 2 and scaleData[1].value == "" and scaleData[2].value == "A")
+  local soundData = w.settingsDropdowns[2]()
+  check("sound dropdown has Off + chimes",
+    #soundData == 4 and soundData[1].value == "0" and soundData[2].value == "878")
   check("callbacks attached", (function()
     for _, r in ipairs(w.settingsReg) do
       if not w.settingCallbacks[r.var] then return false end
     end
-    return #w.settingsReg == 10
+    return #w.settingsReg == 11
   end)())
   local clink = "|cffa335ee|Hitem:710|h[Helm]|h|r"
   w.bags[0] = { clink }
@@ -1605,6 +1611,67 @@ do
   clientLoaded(w)
   w.frame.onEvent(nil, "PLAYER_ENTERING_WORLD")
   check("note names Pawn", w.headerNotes[1]:find("Upgrade source: Pawn", 1) ~= nil)
+end
+
+-- 60. Equip plays the configured sound.
+do
+  local w = newWorld()
+  local link = "|cffa335ee|Hitem:800|h[Helm]|h|r"
+  w.bags[0] = { link }
+  w.slots[link] = "INVTYPE_HEAD"
+  w.upgradeLists[link] = upgrade("A", 0.05)
+  local ns = loadAddon(w)
+  ns.scan()
+  check("equipped", #w.equipped == 1)
+  check("quest chime played", #w.playedSounds == 1 and w.playedSounds[1] == 878)
+end
+
+-- 61. Sound off: no PlaySound call.
+do
+  local w = newWorld()
+  w.savedVars = { equipSound = "0" }
+  local link = "|cffa335ee|Hitem:801|h[Helm]|h|r"
+  w.bags[0] = { link }
+  w.slots[link] = "INVTYPE_HEAD"
+  w.upgradeLists[link] = upgrade("A", 0.05)
+  local ns = loadAddon(w)
+  clientLoaded(w)
+  ns.scan()
+  check("equipped without sound", #w.equipped == 1 and #w.playedSounds == 0)
+end
+
+-- 62. Audit mode never equips, so no sound either.
+do
+  local w = newWorld()
+  w.savedVars = { audit = true }
+  local link = "|cffa335ee|Hitem:802|h[Helm]|h|r"
+  w.bags[0] = { link }
+  w.slots[link] = "INVTYPE_HEAD"
+  w.upgradeLists[link] = upgrade("A", 0.05)
+  local ns = loadAddon(w)
+  clientLoaded(w)
+  ns.scan()
+  check("audit silent", #w.equipped == 0 and #w.playedSounds == 0)
+end
+
+-- 63. Sound dropdown lists Off plus the verified chimes; changing it previews.
+do
+  local w = newWorld()
+  w.withSettings = true
+  local ns = loadAddon(w)
+  clientLoaded(w)
+  local getOptions
+  for _, fn in ipairs(w.settingsDropdowns) do
+    local data = fn()
+    if data[1] and data[1].value == "0" then getOptions = data end
+  end
+  check("sound dropdown found", getOptions ~= nil)
+  check("off plus three chimes", #getOptions == 4)
+  check("first option is Off", getOptions[1].text == "Off")
+  -- Preview: switching the setting plays the new choice immediately.
+  ns.opts().equipSound = "73277"
+  w.settingCallbacks["VocGear_equipSound"]()
+  check("preview plays selection", #w.playedSounds == 1 and w.playedSounds[1] == 73277)
 end
 
 print("tests/run.lua: " .. passed .. " checks passed")

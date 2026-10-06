@@ -29,6 +29,7 @@ local defaults = {
   protectSets = true,
   scale = "",
   sheetButton = true,
+  equipSound = "878", -- "0" = off; others are SOUNDKIT IDs, see ns.EQUIP_SOUNDS
 }
 ns.defaults = defaults
 
@@ -41,6 +42,26 @@ function ns.opts()
     if type(ns.db[k]) ~= type(v) then ns.db[k] = v end
   end
   return ns.db
+end
+
+-- Equip celebration sound. IDs verified in Blizzard_SharedXML/Mainline
+-- SoundKitConstants.lua (live branch): these are the client's own UI
+-- chimes, played with PlaySound so they honor the player's volume.
+-- "0" disables the sound. The quest-complete chime is the default: a
+-- chill ding, audibly distinct from the level-up fanfare.
+ns.EQUIP_SOUNDS = {
+  { id = "878", label = "Quest chime" }, -- IG_QUEST_LIST_COMPLETE
+  { id = "23404", label = "Auto quest complete" }, -- UI_AUTO_QUEST_COMPLETE
+  { id = "73277", label = "World quest complete" }, -- UI_WORLDQUEST_COMPLETE
+}
+
+-- Play the configured equip sound. Silent when off, when PlaySound is
+-- unavailable, or when the ID is unknown: a sound must never error.
+function ns.playEquipSound()
+  local id = tonumber(ns.opts().equipSound) or 0
+  if id == 0 then return end
+  if type(PlaySound) ~= "function" then return end
+  pcall(PlaySound, id)
 end
 
 -- Pawn API (verified against Pawn 2.13.16 source; see .reference/pawn-analysis.md):
@@ -532,6 +553,7 @@ function ns.equip(link, ev, slotID)
   ns.ourEquipPending = true
   if slotID then EquipItemByName(link, slotID) else EquipItemByName(link) end
   dbg("vocgear", "equipped", "item=" .. tostring(link) .. " slot=" .. tostring(slotID))
+  ns.playEquipSound()
   if o.announce then ns.say("equipped " .. link .. ns.why(ev)) end
   return true
 end
@@ -763,6 +785,14 @@ function ns.ensureSettings()
       "Which Pawn scale counts. Any visible scale preserves stock behavior.")
     ns.onSettingChanged(s, ns.scan)
   end
+  do
+    local s = Settings.RegisterAddOnSetting(
+      category, "VocGear_equipSound", "equipSound",
+      db, type(defaults.equipSound), "Equip sound", defaults.equipSound)
+    Settings.CreateDropdown(category, s, ns.equipSoundOptions,
+      "Sound played when VocGear equips an upgrade. Changing it previews the sound.")
+    ns.onSettingChanged(s, ns.playEquipSound)
+  end
   check("sheetButton", "Character sheet button",
     "Show a Check Bags button on the character sheet.",
     function() ns.ensurePaperDollButton() end)
@@ -803,6 +833,15 @@ function ns.scaleOptions()
         end
       end
     end
+  end
+  return container:GetData()
+end
+
+function ns.equipSoundOptions()
+  local container = Settings.CreateControlTextContainer()
+  container:Add("0", "Off", "No sound when equipping.")
+  for _, snd in ipairs(ns.EQUIP_SOUNDS) do
+    container:Add(snd.id, snd.label, "")
   end
   return container:GetData()
 end
