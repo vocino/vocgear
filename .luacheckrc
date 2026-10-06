@@ -27,6 +27,8 @@ read_globals = {
   "GetTime", "InCombatLockdown", "NUM_BAG_SLOTS", "PaperDollFrame",
   "Settings", "MinimalSliderWithSteppersMixin", "UnitLevel",
   "hooksecurefunc", "strtrim",
+  -- VocDebug guest hook (our own addon, not a Blizzard API)
+  "VOCDBG",
   -- Pawn (required dependency)
   "PawnGetAllScalesEx", "PawnGetItemData", "PawnIsArmorBestTypeForPlayer",
   "PawnIsItemAnItemLevelUpgrade", "PawnIsItemAnUpgrade",

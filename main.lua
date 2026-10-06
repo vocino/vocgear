@@ -1,6 +1,9 @@
 local name, ns = ...
 -- VocGear: equip what Pawn says is an upgrade. Nothing else (plus advice).
 
+-- VocDebug guest hook: silent no-op unless the debug addon is loaded.
+local dbg = VOCDBG or function() end
+
 VocGearDB = VocGearDB or {}
 ns.db = VocGearDB
 
@@ -422,6 +425,7 @@ function ns.equip(link, ev, slotID)
   end
   ns.ourEquipPending = true
   if slotID then EquipItemByName(link, slotID) else EquipItemByName(link) end
+  dbg("vocgear", "equipped", "item=" .. tostring(link) .. " slot=" .. tostring(slotID))
   if o.announce then ns.say("equipped " .. link .. ns.why(ev)) end
   return true
 end
