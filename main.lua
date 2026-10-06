@@ -1,5 +1,6 @@
 local name, ns = ...
--- VocGear: equip what Pawn says is an upgrade. Nothing else (plus advice).
+-- VocGear: equip bag upgrades out of combat. Pawn's verdict when Pawn is
+-- driving, item level when it is not. Nothing else (plus advice).
 
 -- VocDebug guest hook: silent no-op unless the debug addon is loaded.
 local dbg = VOCDBG or function() end
@@ -55,20 +56,55 @@ function ns.pawnReady()
     and type(_G.PawnIsItemAnItemLevelUpgrade) == "function"
 end
 
--- Answer "is this link an upgrade?" through Pawn, honoring the scale
--- filter, percent threshold, and item-level toggle.
--- Returns nil when unsure (Pawn uncached or erroring), else:
+-- Pawn is the upgrade source when its API is present. Pawn itself filters
+-- by visible scales; a loaded Pawn with no scales simply finds nothing,
+-- and the item-level toggle still applies. When Pawn is absent entirely,
+-- the built-in fallback drives.
+function ns.pawnActive()
+  return ns.pawnReady()
+end
+
+-- Pawn installed and loadable but not loaded yet: its ADDON_LOADED will
+-- trigger a rescan, so wait instead of falling back for a single pass and
+-- switching systems mid-session. A missing or disabled Pawn falls back
+-- immediately (this is also the Forever path: Pawn has no Forever build).
+function ns.pawnPending()
+  if type(IsAddOnLoaded) == "function" and IsAddOnLoaded("Pawn") then
+    return false
+  end
+  if type(GetAddOnInfo) ~= "function" then return false end
+  local ok, installedName, _, _, loadable = pcall(GetAddOnInfo, "Pawn")
+  return ok and installedName ~= nil and loadable
+end
+
+-- Which system is deciding upgrades right now. Shown in settings and in
+-- announcements so the player always knows what is driving.
+function ns.sourceLabel()
+  if ns.pawnActive() then return "Pawn" end
+  return "item level"
+end
+
+-- Answer "is this link an upgrade?", through Pawn when it is driving and
+-- through the built-in item-level fallback otherwise.
+-- Returns nil when unsure (data uncached or erroring), else:
 --   { upgrade=bool, percent=ratio|nil, existing=link|nil,
 --     ilvl=bool, ilvlDiff=n|nil, itemLevel=n|nil }
 function ns.evaluate(link)
-  local o = ns.opts()
-  local ok, item = pcall(_G.PawnGetItemData, link)
-  if not ok or not item or item.Link == nil then return nil end
-  -- Min-level gate (what CheckLevel=true did on the old boolean API).
+  -- Min-level gate, both paths (what CheckLevel=true did on Pawn's old API).
   local _, _, _, _, minLevel = C_Item.GetItemInfo(link)
   if minLevel and UnitLevel("player") < minLevel then
     return { upgrade = false }
   end
+  if ns.pawnActive() then
+    return ns.evaluatePawn(link)
+  end
+  return ns.evaluateBuiltin(link)
+end
+
+function ns.evaluatePawn(link)
+  local o = ns.opts()
+  local ok, item = pcall(_G.PawnGetItemData, link)
+  if not ok or not item or item.Link == nil then return nil end
   local result = { upgrade = false, itemLevel = item.Level }
   local okUp, upgrades = pcall(_G.PawnIsItemAnUpgrade, item)
   if not okUp then return nil end
@@ -99,6 +135,76 @@ function ns.evaluate(link)
     end
   end
   return result
+end
+
+-- Class best armor, Enum.ItemArmorSubclass (ItemConstantsDocumentation,
+-- live 12.1.0): Cloth 1, Leather 2, Mail 3, Plate 4.
+ns.ARMOR_BEST = {
+  WARRIOR = 4, PALADIN = 4, DEATHKNIGHT = 4,
+  HUNTER = 3, SHAMAN = 3, EVOKER = 3,
+  ROGUE = 2, MONK = 2, DRUID = 2, DEMONHUNTER = 2,
+  MAGE = 1, PRIEST = 1, WARLOCK = 1,
+}
+
+-- Armor-type gate for the built-in path (Pawn's own gate is unavailable).
+-- A candidate passes when it matches the class best type, or when it
+-- matches what is already worn (leveling in a lower armor type).
+-- Cloaks have no proficiency gate. Unknown data reads as unsure (nil),
+-- never as a yes: a firm answer waits for the item cache.
+function ns.armorBestBuiltin(link)
+  local _, _, _, equipLoc, _, classID, subclassID = C_Item.GetItemInfoInstant(link)
+  if equipLoc == "INVTYPE_CLOAK" then return true end
+  if classID == nil or subclassID == nil then return nil end
+  if classID ~= 4 or subclassID == 0 or subclassID == 5 then return true end
+  local _, classKey = UnitClass("player")
+  local best = classKey and ns.ARMOR_BEST[classKey]
+  if best and subclassID == best then return true end
+  local slotID = equipLoc and ns.primarySlot[equipLoc]
+  local held = slotID and GetInventoryItemLink("player", slotID)
+  if held then
+    local _, _, _, _, _, hClass, hSub = C_Item.GetItemInfoInstant(held)
+    if hClass == 4 and hSub == subclassID then return true end
+  end
+  return false
+end
+
+-- Built-in upgrade check: pure item level, no stat weights. Fires only
+-- when Pawn is not driving. Same result shape as the Pawn path, so the
+-- scan, safeguards, and announcements downstream need no changes.
+function ns.evaluateBuiltin(link)
+  local _, _, _, equipLoc = C_Item.GetItemInfoInstant(link)
+  if not equipLoc or equipLoc == "" then return { upgrade = false } end
+  local armorOK = ns.armorBestBuiltin(link)
+  if armorOK == nil then return nil end
+  if not armorOK then return { upgrade = false } end
+  local candLevel = C_Item.GetDetailedItemLevelInfo(link)
+  if not candLevel then return nil end
+  local pair = ns.slotPairs[equipLoc]
+  if pair then
+    -- Two-slot: upgrade when it beats the weaker of the pair.
+    local weakLevel
+    for _, slotID in ipairs(pair) do
+      local held = GetInventoryItemLink("player", slotID)
+      if not held then
+        return { upgrade = true, ilvl = true, ilvlDiff = candLevel, itemLevel = candLevel }
+      end
+      local lvl = C_Item.GetDetailedItemLevelInfo(held)
+      if lvl and (not weakLevel or lvl < weakLevel) then weakLevel = lvl end
+    end
+    if not weakLevel then return nil end
+    local diff = candLevel - weakLevel
+    return { upgrade = diff > 0, ilvl = true, ilvlDiff = diff, itemLevel = candLevel }
+  end
+  local slotID = ns.primarySlot[equipLoc]
+  if not slotID then return { upgrade = false } end
+  local held = GetInventoryItemLink("player", slotID)
+  if not held then
+    return { upgrade = true, ilvl = true, ilvlDiff = candLevel, itemLevel = candLevel }
+  end
+  local heldLevel = C_Item.GetDetailedItemLevelInfo(held)
+  if not heldLevel then return nil end
+  local diff = candLevel - heldLevel
+  return { upgrade = diff > 0, ilvl = true, ilvlDiff = diff, itemLevel = candLevel }
 end
 
 -- Armor-type gate. Pawn applies PawnIsArmorBestTypeForPlayer to score
@@ -185,7 +291,7 @@ function ns.announceWeaponKind(link, ev)
   local o = ns.opts()
   if o.announce and not ns.flagged[link] then
     ns.flagged[link] = true
-    ns.say("Pawn upgrade in bags (melee/ranged swap, not auto-equipped): " .. link .. ns.why(ev))
+    ns.say(ns.sourceLabel() .. " upgrade in bags (melee/ranged swap, not auto-equipped): " .. link .. ns.why(ev))
   end
 end
 
@@ -407,7 +513,7 @@ function ns.announce(link, ev)
   local o = ns.opts()
   if o.announce and not ns.flagged[link] then
     ns.flagged[link] = true
-    ns.say("Pawn upgrade in bags (not auto-equipped): " .. link .. ns.why(ev))
+    ns.say(ns.sourceLabel() .. " upgrade in bags (not auto-equipped): " .. link .. ns.why(ev))
   end
 end
 
@@ -523,7 +629,10 @@ function ns.scan()
   if ns.scanning then return end
   local o = ns.opts()
   if not o.enabled then return end
-  if not ns.pawnReady() then ns.retrySoon() return end
+  -- Pawn installed but still loading: wait for it rather than falling back
+  -- for a single pass. Otherwise the scan runs on whichever source is
+  -- active (Pawn's verdict, or the built-in item-level fallback).
+  if ns.pawnPending() then ns.retrySoon() return end
   if InCombatLockdown() then return end
   ns.trackSwaps()
   ns.scanning = true
@@ -618,7 +727,7 @@ function ns.ensureSettings()
     Settings.CreateCheckbox(category, s, tooltip)
     ns.onSettingChanged(s, onChange or ns.scan)
   end
-  check("enabled", "Enable auto-equip", "Equip Pawn-flagged upgrades out of combat.")
+  check("enabled", "Enable auto-equip", "Equip upgrades out of combat. Pawn's verdict when Pawn is driving, item level otherwise.")
   check("announce", "Chat announcements", "Print a line when VocGear equips, picks, or advises.")
   check("audit", "Audit mode", "Announce only: never equip or pick, just say what would happen.")
   do
@@ -659,6 +768,27 @@ function ns.ensureSettings()
     function() ns.ensurePaperDollButton() end)
   ns.settingsBuilt = true
   ns.settingsCategory = category
+end
+
+function ns.sourceNoteText()
+  if ns.pawnActive() then return "Upgrade source: Pawn (your stat weights)" end
+  return "Upgrade source: built-in item level (install Pawn for stat weights)"
+end
+
+-- Upgrade-source indicator at the top of the panel, so the player always
+-- knows which system is deciding. Added once all addons are loaded (a
+-- late Pawn is counted); plain-text header via the vertical layout's own
+-- initializer, guarded so the panel is complete without it.
+ns.sourceNoteAdded = false
+function ns.ensureSourceNote()
+  if ns.sourceNoteAdded or not ns.settingsBuilt then return end
+  if type(CreateSettingsListSectionHeaderInitializer) ~= "function" then return end
+  if not (SettingsPanel and type(SettingsPanel.GetLayout) == "function") then return end
+  local ok = pcall(function()
+    local layout = SettingsPanel:GetLayout(ns.settingsCategory)
+    layout:AddInitializer(CreateSettingsListSectionHeaderInitializer(ns.sourceNoteText()))
+  end)
+  if ok then ns.sourceNoteAdded = true end
 end
 
 function ns.scaleOptions()
@@ -754,6 +884,7 @@ ns.frame:SetScript("OnEvent", function(_, event, arg1)
     if arg1 ~= "Pawn" and arg1 ~= name then return end
   elseif event == "PLAYER_ENTERING_WORLD" then
     ns.ensureSettings() -- in case Settings wasn't up at ADDON_LOADED
+    ns.ensureSourceNote() -- all addons loaded: the source reading is final
     ns.ensurePaperDollButton()
   end
   ns.scan()

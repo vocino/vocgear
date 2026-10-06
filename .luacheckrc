@@ -25,7 +25,9 @@ read_globals = {
   "C_Container", "C_Item", "C_SpecializationInfo", "C_Timer",
   "CreateFrame", "EquipItemByName", "GameTooltip", "GetInventoryItemLink",
   "GetTime", "InCombatLockdown", "NUM_BAG_SLOTS", "PaperDollFrame",
-  "Settings", "MinimalSliderWithSteppersMixin", "UnitLevel",
+  "Settings", "MinimalSliderWithSteppersMixin", "UnitClass", "UnitLevel",
+  "IsAddOnLoaded", "GetAddOnInfo",
+  "CreateSettingsListSectionHeaderInitializer", "SettingsPanel",
   "hooksecurefunc", "strtrim",
   -- VocDebug guest hook (our own addon, not a Blizzard API)
   "VOCDBG",

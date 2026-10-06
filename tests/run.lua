@@ -47,6 +47,22 @@ local function loadAddon(world)
     GetSpecializationInfo = function() return world.specID end,
   }
   g.UnitLevel = function() return world.playerLevel end
+  g.UnitClass = function() return "Warrior", world.playerClass or "WARRIOR" end
+  g.IsAddOnLoaded = function(n) return world.loadedAddons and world.loadedAddons[n] or nil end
+  g.GetAddOnInfo = function(n)
+    local a = world.installedAddons and world.installedAddons[n]
+    if not a then return nil end
+    return n, n, "", a.loadable
+  end
+  g.CreateSettingsListSectionHeaderInitializer = function(text)
+    world.headerNotes[#world.headerNotes + 1] = text
+    return {}
+  end
+  g.SettingsPanel = {
+    GetLayout = function(_)
+      return { AddInitializer = function(_, _) end }
+    end,
+  }
   g.GetTime = function() return world.time end
   g.InCombatLockdown = function() return world.inCombat end
   -- Game-chosen equip slot per equip loc, mirroring Pawn's slot table.
@@ -194,7 +210,8 @@ local function newWorld()
            withSettings = false, settingsReg = {}, settingsChecks = 0,
            settingsSliders = 0, settingsDropdowns = {}, settingCallbacks = {},
            frames = {}, gametip = {}, withPaperDoll = false,
-           hooks = {}, pawnBtn = nil }
+           hooks = {}, pawnBtn = nil, playerClass = nil,
+           loadedAddons = nil, installedAddons = nil, headerNotes = {} }
 end
 
 -- Simulate the client deserializing SavedVariables (a FRESH table replaces
@@ -475,18 +492,20 @@ do
   check("no equip in combat", #w.equipped == 0)
 end
 
--- 17. Pawn missing: idle quietly, schedule one retry.
+-- 17. Pawn missing: the built-in fallback drives, not idle.
 do
   local w = newWorld()
   w.pawn = false
   local link = "|cffa335ee|Hitem:444|h[Helm]|h|r"
   w.bags[0] = { link }
+  w.slots[link] = "INVTYPE_HEAD"
+  w.levels[link] = 100 -- empty slot: equips
+  w.classIDs[link], w.subclassIDs[link] = 4, 4
   local ns = loadAddon(w)
   check("pawnReady false without Pawn", ns.pawnReady() == false)
+  check("fallback drives", ns.pawnActive() == false and ns.sourceLabel() == "item level")
   ns.scan()
-  ns.scan()
-  check("no equip without Pawn", #w.equipped == 0)
-  check("exactly one retry scheduled", #w.timers == 1)
+  check("empty slot equips in fallback", #w.equipped == 1)
 end
 
 -- 18. Disabled addon: full no-op.
@@ -1433,6 +1452,159 @@ do -- above-level tier never completes
   local ns = loadAddon(w)
   ns.scan()
   check("above-level completion skipped", #w.equipped == 0 and #w.printed == 0)
+end
+
+-- 52. Built-in fallback drives when Pawn is absent.
+do
+  local w = newWorld()
+  w.pawn = false -- no Pawn stubs at all
+  local held = "|cffa335ee|Hitem:700|h[Plate Helm 90]|h|r"
+  local cand = "|cffa335ee|Hitem:701|h[Plate Helm 100]|h|r"
+  w.equippedSlots[1] = held
+  w.levels[held], w.levels[cand] = 90, 100
+  w.bags[0] = { cand }
+  w.slots[cand] = "INVTYPE_HEAD"
+  w.classIDs[cand], w.subclassIDs[cand] = 4, 4
+  w.classIDs[held], w.subclassIDs[held] = 4, 4
+  local ns = loadAddon(w)
+  check("fallback source label", ns.sourceLabel() == "item level")
+  check("not pawn-active without Pawn", ns.pawnActive() == false)
+  ns.scan()
+  check("fallback equips higher ilvl", #w.equipped == 1 and w.equipped[1].item == cand)
+  check("fallback why names item level", w.printed[1]:find("item level %+10", 1) ~= nil)
+end
+
+-- 53. Fallback announce names the source on two-slot items.
+do
+  local w = newWorld()
+  w.pawn = false
+  local r1 = "|cffa335ee|Hitem:710|h[Ring 90]|h|r"
+  local r2 = "|cffa335ee|Hitem:711|h[Ring 95]|h|r"
+  local cand = "|cffa335ee|Hitem:712|h[Ring 100]|h|r"
+  w.equippedSlots[11], w.equippedSlots[12] = r1, r2
+  w.levels[r1], w.levels[r2], w.levels[cand] = 90, 95, 100
+  w.bags[0] = { cand }
+  w.slots[cand] = "INVTYPE_FINGER"
+  w.classIDs[cand], w.subclassIDs[cand] = 4, 0 -- rings read as generic armor
+  local ns = loadAddon(w)
+  ns.scan()
+  check("two-slot fallback announced", #w.equipped == 0 and #w.printed == 1)
+  check("announce names item level", w.printed[1]:find("item level upgrade in bags %(not auto%-equipped%)", 1) ~= nil)
+end
+
+-- 54. Lower ilvl is not an upgrade in fallback.
+do
+  local w = newWorld()
+  w.pawn = false
+  local held = "|cffa335ee|Hitem:720|h[Plate Helm 100]|h|r"
+  local cand = "|cffa335ee|Hitem:721|h[Plate Helm 90]|h|r"
+  w.equippedSlots[1] = held
+  w.levels[held], w.levels[cand] = 100, 90
+  w.bags[0] = { cand }
+  w.slots[cand] = "INVTYPE_HEAD"
+  w.classIDs[cand], w.subclassIDs[cand] = 4, 4
+  local ns = loadAddon(w)
+  ns.scan()
+  check("lower ilvl ignored", #w.equipped == 0 and #w.printed == 0)
+end
+
+-- 55. Armor-type gate: cloth on a plate wearer is not an upgrade.
+do
+  local w = newWorld()
+  w.pawn = false
+  local held = "|cffa335ee|Hitem:730|h[Plate Helm 90]|h|r"
+  local cand = "|cffa335ee|Hitem:731|h[Cloth Helm 100]|h|r"
+  w.equippedSlots[1] = held
+  w.levels[held], w.levels[cand] = 90, 100
+  w.bags[0] = { cand }
+  w.slots[cand] = "INVTYPE_HEAD"
+  w.classIDs[cand], w.subclassIDs[cand] = 4, 1 -- cloth
+  w.classIDs[held], w.subclassIDs[held] = 4, 4
+  local ns = loadAddon(w)
+  ns.scan()
+  check("cloth-on-warrior rejected", #w.equipped == 0)
+end
+
+-- 56. Leveling in a lower armor type: matching the worn type passes.
+do
+  local w = newWorld()
+  w.pawn = false
+  w.playerClass = "PALADIN"
+  local held = "|cffa335ee|Hitem:740|h[Mail Helm 90]|h|r"
+  local cand = "|cffa335ee|Hitem:741|h[Mail Helm 100]|h|r"
+  w.equippedSlots[1] = held
+  w.levels[held], w.levels[cand] = 90, 100
+  w.bags[0] = { cand }
+  w.slots[cand] = "INVTYPE_HEAD"
+  w.classIDs[cand], w.subclassIDs[cand] = 4, 3 -- mail
+  w.classIDs[held], w.subclassIDs[held] = 4, 3
+  local ns = loadAddon(w)
+  ns.scan()
+  check("mail-on-mail paladin equips", #w.equipped == 1)
+end
+
+-- 57. Cloaks are exempt from the armor gate.
+do
+  local w = newWorld()
+  w.pawn = false -- warrior, empty cloak slot
+  local cand = "|cffa335ee|Hitem:750|h[Cloak 100]|h|r"
+  w.levels[cand] = 100
+  w.bags[0] = { cand }
+  w.slots[cand] = "INVTYPE_CLOAK"
+  w.classIDs[cand], w.subclassIDs[cand] = 4, 1 -- cloaks read as cloth
+  local ns = loadAddon(w)
+  ns.scan()
+  check("cloak equips into empty slot", #w.equipped == 1)
+end
+
+-- 58. Pawn installed but not loaded yet: the scan waits for it.
+do
+  local w = newWorld()
+  w.pawn = false -- API not present yet
+  w.installedAddons = { Pawn = { loadable = true } }
+  w.loadedAddons = {} -- Pawn not loaded
+  local held = "|cffa335ee|Hitem:760|h[Plate Helm 90]|h|r"
+  local cand = "|cffa335ee|Hitem:761|h[Plate Helm 100]|h|r"
+  w.equippedSlots[1] = held
+  w.levels[held], w.levels[cand] = 90, 100
+  w.bags[0] = { cand }
+  w.slots[cand] = "INVTYPE_HEAD"
+  w.classIDs[cand], w.subclassIDs[cand] = 4, 4
+  local ns = loadAddon(w)
+  check("pawn pending detected", ns.pawnPending() == true)
+  ns.scan()
+  check("scan waits for Pawn", #w.equipped == 0 and #w.timers == 1)
+  -- Pawn arrives: API present now, ADDON_LOADED rescans with Pawn driving.
+  w.env.PawnGetItemData = function(link) return { Link = link, Level = w.levels[link] or 80 } end
+  w.env.PawnIsItemAnUpgrade = function(item) return w.upgradeLists[item.Link] end
+  w.env.PawnIsItemAnItemLevelUpgrade = function(item) return w.ilvlDiffs[item.Link] end
+  w.loadedAddons = { Pawn = true }
+  w.upgradeLists[cand] = { { ScaleName = "A", PercentUpgrade = 0.05 } }
+  w.frame.onEvent(nil, "ADDON_LOADED", "Pawn")
+  check("Pawn takes over after load", ns.pawnActive() == true)
+  check("Pawn verdict equips", #w.equipped == 1)
+  check("Pawn percent printed", w.printed[1]:find("%+5%.0%%%)", 1) ~= nil)
+end
+
+-- 59. Settings shows which source is driving.
+do
+  local w = newWorld()
+  w.pawn = false
+  w.withSettings = true
+  local ns = loadAddon(w)
+  clientLoaded(w)
+  w.frame.onEvent(nil, "PLAYER_ENTERING_WORLD")
+  check("source note added", #w.headerNotes == 1)
+  check("note names item level", w.headerNotes[1]:find("built%-in item level", 1) ~= nil)
+end
+do
+  local w = newWorld()
+  w.pawn = true
+  w.withSettings = true
+  local ns = loadAddon(w)
+  clientLoaded(w)
+  w.frame.onEvent(nil, "PLAYER_ENTERING_WORLD")
+  check("note names Pawn", w.headerNotes[1]:find("Upgrade source: Pawn", 1) ~= nil)
 end
 
 print("tests/run.lua: " .. passed .. " checks passed")
