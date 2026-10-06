@@ -1591,7 +1591,7 @@ do
   local w = newWorld()
   w.pawn = false
   w.withSettings = true
-  local ns = loadAddon(w)
+  loadAddon(w)
   clientLoaded(w)
   w.frame.onEvent(nil, "PLAYER_ENTERING_WORLD")
   check("source note added", #w.headerNotes == 1)
@@ -1601,7 +1601,7 @@ do
   local w = newWorld()
   w.pawn = true
   w.withSettings = true
-  local ns = loadAddon(w)
+  loadAddon(w)
   clientLoaded(w)
   w.frame.onEvent(nil, "PLAYER_ENTERING_WORLD")
   check("note names Pawn", w.headerNotes[1]:find("Upgrade source: Pawn", 1) ~= nil)
