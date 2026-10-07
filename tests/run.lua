@@ -36,6 +36,7 @@ local function loadAddon(world)
         nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, world.setIDs[link]
     end,
     GetDetailedItemLevelInfo = function(link) return world.levels[link] end,
+    GetItemUniquenessByID = function(link) return world.uniqueness[link] end,
     GetItemSetInfo = function(setID) return world.setNames[setID] end,
     GetSetBonusesForSpecializationByItemID = function(specID, itemID)
       world.lastBonusSpec = specID
@@ -204,7 +205,7 @@ local function newWorld()
   return { bags = {}, slots = {}, minLevels = {}, levels = {}, classIDs = {}, subclassIDs = {}, time = 1000,
            equippedSlots = {}, equipped = {}, printed = {}, timers = {},
            inCombat = false, pawn = true, pawnNil = {}, upgradeLists = {},
-           armorBest = {}, rarities = {},
+           armorBest = {}, rarities = {}, uniqueness = {},
            setIDs = {}, itemIDs = {}, setBonusSpells = {}, setNames = {},
            specIndex = nil, specID = nil, lastBonusSpec = nil,
            ilvlDiffs = {}, scales = {}, savedVars = nil, playerLevel = 80,
@@ -1013,7 +1014,8 @@ do
       "setCtx", "readyThreshold", "readySet", "breakThreshold", "breakSet",
       "completes", "candSet", "heldSet", "counts", "before", "after", "seen",
       "spells", "specID", "itemID", "setID", "ctx", "threshold",
-      "okIdx", "okID", "idx", "label" }) do
+      "okIdx", "okID", "idx", "label", "otherHeld",
+      "candID", "otherID", "isUnique" }) do
     check("no leaked global: " .. leaked, w.env[leaked] == nil)
   end
   check("slash global registered", w.env.SLASH_VOCGEAR1 == "/vg")
@@ -1672,6 +1674,91 @@ do
   ns.opts().equipSound = "73277"
   w.settingCallbacks["VocGear_equipSound"]()
   check("preview plays selection", #w.playedSounds == 1 and w.playedSounds[1] == 73277)
+end
+
+-- 64. Unique-Equipped twin in the pair's other slot: announce, never equip.
+do
+  local w = newWorld()
+  w.savedVars = { autoTwoSlot = true }
+  local twin = "|cff0070dd|Hitem:101|h[Twin]|h|r" -- worn copy, other slot
+  local ringA = "|cff0070dd|Hitem:100|h[Ring A]|h|r" -- Pawn's named target
+  local cand = "|cffa335ee|Hitem:102|h[Twin+]|h|r" -- same base item, new bonuses
+  w.equippedSlots[11], w.equippedSlots[12] = twin, ringA
+  w.itemIDs[twin], w.itemIDs[cand] = 5001, 5001
+  w.itemIDs[ringA] = 5002
+  w.uniqueness[cand] = true
+  w.bags[0] = { cand }
+  w.slots[cand] = "INVTYPE_FINGER"
+  w.upgradeLists[cand] = upgrade("A", 0.05, ringA)
+  local ns = loadAddon(w)
+  clientLoaded(w)
+  ns.scan()
+  ns.scan()
+  check("unique twin not equipped", #w.equipped == 0)
+  check("unique twin announced once", #w.printed == 1)
+  check("unique wording", w.printed[1]:find("unique%-equipped", 1) ~= nil)
+end
+
+-- 65. Same-item upgrade into its own slot still equips.
+do
+  local w = newWorld()
+  w.savedVars = { autoTwoSlot = true }
+  local twin = "|cff0070dd|Hitem:101|h[Twin]|h|r"
+  local ringB = "|cff0070dd|Hitem:103|h[Ring B]|h|r"
+  local cand = "|cffa335ee|Hitem:102|h[Twin+]|h|r"
+  w.equippedSlots[11], w.equippedSlots[12] = twin, ringB
+  w.itemIDs[twin], w.itemIDs[cand] = 5001, 5001
+  w.itemIDs[ringB] = 5003
+  w.uniqueness[cand] = true
+  w.bags[0] = { cand }
+  w.slots[cand] = "INVTYPE_FINGER"
+  w.upgradeLists[cand] = upgrade("A", 0.05, twin) -- replaces its own twin
+  local ns = loadAddon(w)
+  clientLoaded(w)
+  ns.scan()
+  check("same-slot twin upgrade equips", #w.equipped == 1)
+  check("twin slot targeted", w.equipped[1].slot == 11)
+end
+
+-- 66. Same base item, not unique: no veto.
+do
+  local w = newWorld()
+  w.savedVars = { autoTwoSlot = true }
+  local worn = "|cff0070dd|Hitem:101|h[Worn]|h|r"
+  local ringA = "|cff0070dd|Hitem:100|h[Ring A]|h|r"
+  local cand = "|cffa335ee|Hitem:102|h[Worn+]|h|r"
+  w.equippedSlots[11], w.equippedSlots[12] = worn, ringA
+  w.itemIDs[worn], w.itemIDs[cand] = 5001, 5001
+  w.itemIDs[ringA] = 5002
+  -- uniqueness[cand] unset: an ordinary item
+  w.bags[0] = { cand }
+  w.slots[cand] = "INVTYPE_FINGER"
+  w.upgradeLists[cand] = upgrade("A", 0.05, ringA)
+  local ns = loadAddon(w)
+  clientLoaded(w)
+  ns.scan()
+  check("non-unique duplicate equips", #w.equipped == 1)
+end
+
+-- 67. Missing uniqueness API fails open (status quo ante).
+do
+  local w = newWorld()
+  w.savedVars = { autoTwoSlot = true }
+  local twin = "|cff0070dd|Hitem:101|h[Twin]|h|r"
+  local ringA = "|cff0070dd|Hitem:100|h[Ring A]|h|r"
+  local cand = "|cffa335ee|Hitem:102|h[Twin+]|h|r"
+  w.equippedSlots[11], w.equippedSlots[12] = twin, ringA
+  w.itemIDs[twin], w.itemIDs[cand] = 5001, 5001
+  w.itemIDs[ringA] = 5002
+  w.uniqueness[cand] = true
+  w.bags[0] = { cand }
+  w.slots[cand] = "INVTYPE_FINGER"
+  w.upgradeLists[cand] = upgrade("A", 0.05, ringA)
+  local ns = loadAddon(w)
+  clientLoaded(w)
+  w.env.C_Item.GetItemUniquenessByID = nil -- older client
+  ns.scan()
+  check("missing uniqueness API fails open", #w.equipped == 1)
 end
 
 print("tests/run.lua: " .. passed .. " checks passed")

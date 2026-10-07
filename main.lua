@@ -521,6 +521,42 @@ function ns.resolveTwoSlotSlot(equipLoc, ev, link)
   return nil
 end
 
+-- Unique-Equipped handling. Pawn's verdicts ignore uniqueness (verified:
+-- no unique handling in Pawn 2.13.16; its changelog admits it for rings),
+-- so a Unique-Equipped ring/trinket in bags can be flagged while its twin
+-- is already worn. The client refuses that equip, so the pair's other slot
+-- is checked for the same base item first (bonus/ilvl variants share the
+-- base ID, so copies count as the same). Anything unknown fails open.
+function ns.isUniqueEquipped(link)
+  if not link then return false end
+  if type(C_Item.GetItemUniquenessByID) ~= "function" then return false end
+  local ok, isUnique = pcall(C_Item.GetItemUniquenessByID, link)
+  return ok and isUnique == true
+end
+
+function ns.baseItemID(link)
+  if not link then return nil end
+  local ok, itemID = pcall(C_Item.GetItemInfoInstant, link)
+  if not ok then return nil end
+  return itemID
+end
+
+function ns.uniqueConflict(link, otherHeld)
+  if not otherHeld then return false end
+  if not ns.isUniqueEquipped(link) then return false end
+  local candID, otherID = ns.baseItemID(link), ns.baseItemID(otherHeld)
+  if type(candID) ~= "number" or type(otherID) ~= "number" then return false end
+  return candID == otherID
+end
+
+function ns.announceUnique(link, otherHeld)
+  local o = ns.opts()
+  if o.announce and not ns.flagged[link] then
+    ns.flagged[link] = true
+    ns.say("not equipping " .. link .. " (unique-equipped: " .. otherHeld .. " already equipped)")
+  end
+end
+
 function ns.why(ev)
   local base = ""
   if ev.ilvl then base = " (item level +" .. tostring(ev.ilvlDiff or "?") .. ")"
@@ -687,12 +723,18 @@ function ns.scan()
                 if ev.upgrade then ns.announce(link, ev) end
               else
                 local held = GetInventoryItemLink("player", slotID)
+                local otherHeld
+                for _, s in ipairs(pair) do
+                  if s ~= slotID then otherHeld = GetInventoryItemLink("player", s) end
+                end
                 local breakThreshold, breakSet = ns.setBreaks(setCtx, link, held)
                 local completes = ns.setSwapCompletes(held, readyThreshold, readySet)
                 if o.keepHeirlooms and ns.isHeirloom(held) then
                   ns.announceHeirloom(link, held)
                 elseif breakThreshold then
                   ns.announceSetBreak(link, breakSet, breakThreshold)
+                elseif ns.uniqueConflict(link, otherHeld) then
+                  ns.announceUnique(link, otherHeld)
                 elseif ev.upgrade or completes then
                   if completes then ev.completes = ns.bonusLabel(readySet, completes) end
                   if ns.equip(link, ev, slotID) then ns.scanning = false return end

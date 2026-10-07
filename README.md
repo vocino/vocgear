@@ -54,7 +54,8 @@ unless you opt in. A loop guard leaves freshly displaced gear alone
 for 30 seconds and pauses auto-equip for a minute if the same slot
 flips three times, so two scales can never fight over one item.
 Weapon swaps that cross the melee/ranged line (a sword for a
-hunter's bow) are announced, never auto-equipped.
+hunter's bow) are announced, never auto-equipped. A Unique-Equipped ring or
+trinket whose twin is already worn is announced instead of equipped.
 
 ## What's inside
 
