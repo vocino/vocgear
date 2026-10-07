@@ -1,6 +1,6 @@
-## Interface: 120100
+## Interface: 16001
 ## Title: VocGear
-## Notes: Equip bag upgrades out of combat, with or without Pawn.
+## Notes: Equip bag upgrades out of combat, with or without Pawn. (Forever client)
 ## Author: vocino
 ## Version: @project-version@
 ## Category: Bags & Inventory
