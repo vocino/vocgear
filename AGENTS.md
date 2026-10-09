@@ -3,14 +3,15 @@
 ## Code Map
 
 - `main.lua`: the whole addon: bag scans, Pawn queries, equip rules, Settings panel, slash
-- `VocGear.toc`: addon metadata (`RequiredDeps: Pawn`)
+- `VocGear.toc` / `VocGear_Forever.toc`: addon metadata (dual toc,
+  shared `main.lua`; Pawn is an `OptionalDeps` guest, never required)
 - `tests/run.lua`: stub-harness regression tests (`lua tests/run.lua`)
 - `FAMILY.md`: conventions shared by every Voc addon
 - `VERSIONING.md`: tag-driven semver releases (identical across the family)
 - `.luacheckrc`: lint config declaring the addon's globals
 - `.reference/pawn-analysis.md`: verified Pawn internals + harmony contract (gitignored)
 - `.reference/`: local analysis checkouts, never packaged or committed
-- `.github`: `test.yml` (tests + lint) and `release.yml` (packager)
+- `.github`: `test.yml` (tests + lint + skill checks), `release.yml` (packager), `tag.yml` (cut a tag from anywhere)
 
 ## API references
 
@@ -18,8 +19,9 @@ Code targets the build in `## Interface:` of the `.toc`. Verify every
 WoW API fact against that build, in this order, and nothing else:
 
 1. Blizzard's own API docs for the build: `/api` in the client, or the
-   mirror at https://github.com/Gethe/wow-ui-source, branch `live`,
-   folder `Interface/AddOns/Blizzard_APIDocumentationGenerated/`.
+   mirror at https://github.com/Gethe/wow-ui-source, branch `live`
+   (and `forever` for the Forever client), folder
+   `Interface/AddOns/Blizzard_APIDocumentationGenerated/`.
    Names, namespaces, arguments, returns, and events come from here.
 2. Blizzard's UI source in the same mirror for templates, mixins, and
    `Blizzard_Deprecated*` (what is leaving, what replaces it).
@@ -40,7 +42,7 @@ verified the same way against its current source (see
 ## Family
 
 VocGear is one of the Voc addons. Naming, slash grammar, chat voice,
-settings, layout, and docs follow `FAMILY.md`; that file is identical
+sounds, palette, settings, layout, and docs follow `FAMILY.md`; that file is identical
 in every sibling repo, so edit it everywhere or not at all.
 Debugging follows `FAMILY.md` "Debugging": !BugGrabber +
 BugSack, errors read from `!BugGrabber.lua` after `/reload`.
@@ -52,7 +54,8 @@ sound, or visual-polish work.
 
 Every global carries the `VocGear` prefix: SavedVariables
 (`VocGearDB`), slash (`SLASH_VOCGEAR*`), Settings variables
-(`VocGear_*`), chat (`VocGear:` via `ns.say`). Module state lives on
+(`VocGear_*`), the compartment entry points (`VocGear_Compartment*`),
+chat (`VocGear:` via `ns.say`). Module state lives on
 `ns`. Never introduce an unprefixed global; `luacheck .` enforces it.
 
 ## Tests

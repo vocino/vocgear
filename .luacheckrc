@@ -12,25 +12,26 @@ self = false
 unused_args = false
 exclude_files = { ".reference/**" }
 
--- Globals this addon owns: SavedVariables and slash registration.
+-- Globals this addon owns: SavedVariables, slash registration, and the
+-- addon compartment entry points named in the .toc.
 globals = {
   "VocGearDB",
   "SLASH_VOCGEAR1", "SLASH_VOCGEAR2",
   "SlashCmdList",
+  "VocGear_CompartmentClick", "VocGear_CompartmentEnter", "VocGear_CompartmentLeave",
 }
 
 -- WoW API and UI globals read by the addon.
 read_globals = {
   "_G",
-  "C_Container", "C_Item", "C_SpecializationInfo", "C_Timer",
+  "C_AddOns", "C_Container", "C_Item", "C_SpecializationInfo", "C_Timer",
   "CreateFrame", "EquipItemByName", "GameTooltip", "GetInventoryItemLink",
   "GetTime", "InCombatLockdown", "NUM_BAG_SLOTS", "PaperDollFrame",
-  "PlaySound", "Settings", "MinimalSliderWithSteppersMixin", "UnitClass", "UnitLevel",
-  "IsAddOnLoaded", "GetAddOnInfo",
+  "PlaySound", "SOUNDKIT", -- presence-gated; ns.play falls back to numeric IDs
+  "Settings", "MinimalSliderWithSteppersMixin", "UnitClass", "UnitLevel",
   "CreateSettingsListSectionHeaderInitializer", "SettingsPanel",
   "hooksecurefunc", "strtrim",
-  -- VocDebug guest hook (our own addon, not a Blizzard API)
-  -- Pawn (required dependency)
+  -- Pawn (optional guest: drives verdicts when present)
   "PawnGetAllScalesEx", "PawnGetItemData", "PawnIsArmorBestTypeForPlayer",
   "PawnIsItemAnItemLevelUpgrade", "PawnIsItemAnUpgrade",
   "PawnUI_InventoryPawnButton", "PawnUI_InventoryPawnButton_Move",

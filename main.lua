@@ -13,6 +13,35 @@ function ns.say(msg)
   print("|c" .. ns.PREFIX_COLOR .. name .. "|r: " .. tostring(msg))
 end
 
+-- Confirmation sounds shared by every Voc addon (FAMILY.md "Sounds"):
+-- SOUNDKIT names first, the numeric IDs behind them so a Blizzard
+-- rename never silences the polish. Presence-gated: no sound API, no
+-- sound, never an error. The equip chime is separate and configurable
+-- (ns.playEquipSound).
+ns.SOUNDS = {
+  on = { "IG_MAINMENU_OPTION_CHECKBOX_ON", 856 },
+  off = { "IG_MAINMENU_OPTION_CHECKBOX_OFF", 857 },
+  open = { "IG_MAINMENU_OPEN", 850 },
+  close = { "IG_MAINMENU_CLOSE", 851 },
+}
+function ns.play(kind)
+  local s = ns.SOUNDS[kind]
+  if not s or type(PlaySound) ~= "function" then return end
+  local id = type(SOUNDKIT) == "table" and SOUNDKIT[s[1]] or nil
+  pcall(PlaySound, type(id) == "number" and id or s[2])
+end
+
+-- Palette (FAMILY.md "Palette"), defined once. VocGear paints only
+-- tooltips, so only the text tokens are ever read.
+ns.COLORS = {
+  gold = { 1, 0.82, 0 },
+  text = { 1, 1, 1 },
+  muted = { 0.5, 0.5, 0.5 },
+  red = { 0.9, 0.3, 0.25 },
+  green = { 0.25, 0.9, 0.35 },
+}
+local COLORS = ns.COLORS
+
 -- Defaults. minUpgradePct is a percent in 5s; 0 accepts every Pawn
 -- verdict (Pawn's own ~0.5% bar still applies upstream).
 -- scale "" means any visible Pawn scale.
@@ -87,13 +116,18 @@ end
 -- trigger a rescan, so wait instead of falling back for a single pass and
 -- switching systems mid-session. A missing or disabled Pawn falls back
 -- immediately (this is also the Forever path: Pawn has no Forever build).
+-- C_AddOns (AddOnsDocumentation, live and forever): the bare
+-- IsAddOnLoaded/GetAddOnInfo globals left with Blizzard_Deprecated and
+-- no longer exist on either client, so this reads only the namespace.
 function ns.pawnPending()
-  if type(IsAddOnLoaded) == "function" and IsAddOnLoaded("Pawn") then
+  if type(C_AddOns) ~= "table" then return false end
+  if type(C_AddOns.IsAddOnLoaded) ~= "function" or type(C_AddOns.GetAddOnInfo) ~= "function" then
     return false
   end
-  if type(GetAddOnInfo) ~= "function" then return false end
-  local ok, installedName, _, _, loadable = pcall(GetAddOnInfo, "Pawn")
-  return ok and installedName ~= nil and loadable
+  local okLoaded, loaded = pcall(C_AddOns.IsAddOnLoaded, "Pawn")
+  if okLoaded and loaded then return false end
+  local ok, installedName, _, _, loadable = pcall(C_AddOns.GetAddOnInfo, "Pawn")
+  return ok and installedName ~= nil and loadable == true
 end
 
 -- Which system is deciding upgrades right now. Shown in settings and in
@@ -1014,10 +1048,13 @@ function ns.ensurePaperDollButton()
   local btn = CreateFrame("Button", nil, PaperDollFrame, "UIPanelButtonTemplate")
   btn:SetText("Check Bags")
   btn:SetSize(110, 24)
-  btn:SetScript("OnClick", function() ns.checkNow() end)
+  btn:SetScript("OnClick", function() ns.play("on") ns.checkNow() end)
+  -- Hover contract (voc-addons principle 3): gold title, one line.
   btn:SetScript("OnEnter", function(self)
     GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-    GameTooltip:SetText("Find best gear in bags (honors VocGear settings)")
+    GameTooltip:SetText("Check Bags", COLORS.gold[1], COLORS.gold[2], COLORS.gold[3])
+    GameTooltip:AddLine("Find the best gear in your bags now. Honors every VocGear setting.",
+      COLORS.text[1], COLORS.text[2], COLORS.text[3], true)
     GameTooltip:Show()
   end)
   btn:SetScript("OnLeave", function() GameTooltip:Hide() end)
@@ -1030,6 +1067,30 @@ end
 function ns.openConfig()
   local ok = pcall(function() Settings.OpenToCategory(ns.settingsCategory:GetID()) end)
   if not ok then ns.say("open Settings > AddOns > VocGear") end
+end
+
+-- Addon compartment (FAMILY.md "Addon compartment"): the toc names
+-- these three globals; Blizzard's compartment menu calls them with
+-- (addonName, button). VocGear has no window, so the click opens its
+-- settings; hover follows the tooltip contract: gold title, one line,
+-- the slash hint.
+function VocGear_CompartmentClick()
+  ns.openConfig()
+end
+
+function VocGear_CompartmentEnter(_, button)
+  if type(GameTooltip) ~= "table" then return end
+  GameTooltip:SetOwner(button, "ANCHOR_LEFT")
+  GameTooltip:SetText("VocGear", COLORS.gold[1], COLORS.gold[2], COLORS.gold[3])
+  GameTooltip:AddLine("Equips bag upgrades out of combat: " .. ns.sourceLabel() .. " is deciding.",
+    COLORS.text[1], COLORS.text[2], COLORS.text[3], true)
+  GameTooltip:AddLine("/vg toggles auto-equip. /vg help lists the rest.",
+    COLORS.muted[1], COLORS.muted[2], COLORS.muted[3], true)
+  GameTooltip:Show()
+end
+
+function VocGear_CompartmentLeave()
+  if type(GameTooltip) == "table" then GameTooltip:Hide() end
 end
 
 ns.frame = CreateFrame("Frame")
@@ -1077,10 +1138,12 @@ function ns.help()
   for _, line in ipairs(ns.HELP) do print("  " .. line) end
 end
 
--- Toggle or set auto-equip; re-enabling clears the loop guard.
+-- Toggle or set auto-equip; re-enabling clears the loop guard. Every
+-- toggle confirms with the checkbox pair (voc-addons principle 3).
 function ns.setEnabled(on)
   local o = ns.opts()
   o.enabled = on
+  ns.play(on and "on" or "off")
   ns.say("auto-equip " .. (on and "on" or "off"))
   if on then ns.clearGuard() ns.scan() end
 end
@@ -1098,6 +1161,7 @@ SlashCmdList.VOCGEAR = function(msg)
     ns.setEnabled(msg == "on")
   elseif msg == "announce" then
     o.announce = not o.announce
+    ns.play(o.announce and "on" or "off")
     ns.say("announcements " .. (o.announce and "on" or "off"))
   elseif msg == "config" then
     ns.openConfig()
