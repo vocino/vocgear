@@ -673,6 +673,9 @@ do
 end
 
 -- 23. Breaker trips on 3 same-slot equips, pauses, then resumes.
+-- Consecutive scans can no longer churn one slot (the settle defers them),
+-- so each follow-up equip lands on a later scan past the settle but still
+-- inside the breaker window: the breaker stays the slow-burn backstop.
 do
   local w = newWorld()
   local mk = function(id) return "|cffa335ee|Hitem:" .. id .. "|h[Helm " .. id .. "]|h|r" end
@@ -685,7 +688,14 @@ do
   end
   local ns = loadAddon(w)
   ns.scan() -- equips B
+  w.time = w.time + 1
+  ns.scan() -- sees B's touch; C waits out the settle
+  check("settle defers churn", #w.equipped == 1)
+  w.time = w.time + 10
   ns.scan() -- equips C
+  w.time = w.time + 1
+  ns.scan() -- sees C's touch; D waits
+  w.time = w.time + 10
   ns.scan() -- equips D
   ns.scan() -- sees 3rd touch: trips
   check("breaker trips", ns.isPaused())
@@ -1026,7 +1036,7 @@ do
   clientLoaded(w)
   ns.scan()
   w.env.SlashCmdList.VOCGEAR("help")
-  for _, leaked in ipairs({ "bag", "slot", "slotID", "link", "ev", "o", "s", "db",
+  for _, leaked in ipairs({ "bag", "slot", "slotID", "checkSlot", "link", "ev", "o", "s", "db",
       "snap", "pair", "held", "btn", "now", "bar", "item", "line", "msg",
       "cand", "cur", "equipLoc", "classID", "subclassID",
       "setCtx", "readyThreshold", "readySet", "breakThreshold", "breakSet",
@@ -1987,6 +1997,86 @@ do -- control: wieldable verdicts still equip
   local ns = loadAddon(w)
   ns.scan()
   check("wieldable equips", #w.equipped == 1)
+end
+
+-- 76. Same-slot settle: a second ring for one slot waits for Pawn to
+-- catch up instead of displacing the ring just equipped. (Pawn refreshes
+-- best-item data on a 250ms throttle, so the immediate post-equip rescan
+-- prices every leftover candidate against the pre-equip second-best.)
+do
+  local w = newWorld()
+  w.savedVars = { autoTwoSlot = true }
+  local ringA = "|cff0070dd|Hitem:100|h[Ring A]|h|r" -- Pawn's best for A
+  local ringB = "|cff0070dd|Hitem:101|h[Ring B]|h|r" -- stale second-best
+  local cand1 = "|cffa335ee|Hitem:102|h[Ring C]|h|r"
+  local cand2 = "|cffa335ee|Hitem:103|h[Ring D]|h|r"
+  w.equippedSlots[11], w.equippedSlots[12] = ringA, ringB
+  w.bags[0] = { cand1, cand2 }
+  w.slots[cand1], w.slots[cand2] = "INVTYPE_FINGER", "INVTYPE_FINGER"
+  w.upgradeLists[cand1] = upgrade("A", 0.022)
+  w.upgradeLists[cand2] = upgrade("A", 0.028)
+  w.bestLinks.A = { INVTYPE_FINGER = "item:100::::::" }
+  local ns = loadAddon(w)
+  clientLoaded(w) -- its ADDON_LOADED scan puts cand1 in the non-best slot
+  check("first ring equips", #w.equipped == 1 and w.equipped[1].slot == 12)
+  w.time = w.time + 1 -- bag update lands a second later, Pawn still stale
+  ns.scan()
+  check("second ring waits out the settle", #w.equipped == 1)
+  check("settle announced", w.printed[#w.printed]:find("slot settling", 1) ~= nil)
+  check("settle schedules retry", #w.timers == 1)
+  w.time = w.time + 10 -- settle expires; the stub stays stale, so it equips
+  ns.scan()
+  check("settled ring equips", #w.equipped == 2 and w.equipped[2].slot == 12)
+  check("breaker never trips", not ns.isPaused())
+end
+
+-- 77. Settle covers single-slot items too (slot derived, equip unforced).
+do
+  local w = newWorld()
+  local helmA = "|cff0070dd|Hitem:500|h[Helm A]|h|r"
+  local cand1 = "|cffa335ee|Hitem:501|h[Helm B]|h|r"
+  local cand2 = "|cffa335ee|Hitem:502|h[Helm C]|h|r"
+  w.equippedSlots[1] = helmA
+  w.bags[0] = { cand1, cand2 }
+  w.slots[cand1], w.slots[cand2] = "INVTYPE_HEAD", "INVTYPE_HEAD"
+  w.upgradeLists[cand1] = upgrade("A", 0.05)
+  w.upgradeLists[cand2] = upgrade("A", 0.06)
+  local ns = loadAddon(w)
+  ns.scan()
+  check("first helm equips unforced", #w.equipped == 1 and w.equipped[1].slot == nil)
+  w.time = w.time + 1
+  ns.scan()
+  check("second helm waits", #w.equipped == 1)
+  w.time = w.time + 10
+  ns.scan()
+  check("settled helm equips", #w.equipped == 2)
+end
+
+-- 78. Settle only guards displacement: an emptied touched slot still equips.
+do
+  local w = newWorld()
+  w.savedVars = { autoTwoSlot = true }
+  local ringA = "|cff0070dd|Hitem:100|h[Ring A]|h|r"
+  local ringB = "|cff0070dd|Hitem:101|h[Ring B]|h|r"
+  local cand1 = "|cffa335ee|Hitem:102|h[Ring C]|h|r"
+  local cand2 = "|cffa335ee|Hitem:103|h[Ring D]|h|r"
+  w.equippedSlots[11], w.equippedSlots[12] = ringA, ringB
+  w.bags[0] = { cand1 }
+  w.slots[cand1], w.slots[cand2] = "INVTYPE_FINGER", "INVTYPE_FINGER"
+  w.upgradeLists[cand1] = upgrade("A", 0.05, ringB) -- names slot 12
+  w.upgradeLists[cand2] = upgrade("A", 0.03)
+  local ns = loadAddon(w)
+  clientLoaded(w) -- its ADDON_LOADED scan puts cand1 in the named slot
+  check("ring equips into named slot", #w.equipped == 1 and w.equipped[1].slot == 12)
+  ns.scan() -- observes the touch; displaced ringB sits out
+  check("observation scan equips nothing", #w.equipped == 1)
+  w.equippedSlots[12] = nil -- player removes the new ring by hand
+  w.bags[0][#w.bags[0] + 1] = cand1
+  w.bags[0][#w.bags[0] + 1] = cand2
+  w.time = w.time + 1
+  ns.scan()
+  check("empty touched slot equips", #w.equipped == 2 and w.equipped[2].slot == 12)
+  check("emptied slot takes the new ring", w.equipped[2].item == cand2)
 end
 
 print("tests/run.lua: " .. passed .. " checks passed")
