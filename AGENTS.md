@@ -73,6 +73,8 @@ Follow `VERSIONING.md` when cutting a release; never retag.
 `_retail_\Interface\AddOns\VocGear` is a directory junction to this repo,
 so edits go live on `/reload`. The client only loads `.toc`-listed files;
 dev files (`tests/`, `.git`, docs) sitting in the folder are ignored.
+`_classic_beta_\Interface\AddOns\VocGear` is the same junction for the
+Forever Beta client (1.60.1, `WowB.exe`), which loads `VocGear_Forever.toc`.
 
 Recreate: `New-Item -ItemType Junction -Path '<AddOns>\VocGear' -Target D:\Code\vocgear`
 Remove: `Remove-Item '<AddOns>\VocGear'` (link only, never `-Recurse`)
