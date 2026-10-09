@@ -127,16 +127,33 @@ local function loadAddon(world)
   g.PawnGetItemData = world.pawn and
     function(link)
       if world.pawnNil[link] then return nil end
-      return { Link = link, Level = world.levels[link] or 80 }
+      return { Link = link, Level = world.levels[link] or 80, CanEquip = world.canEquip[link] }
     end or nil
   g.PawnIsItemAnUpgrade = world.pawn and
-    function(item) return world.upgradeLists[item.Link], nil, world.bestFor[item.Link] end or nil
+    function(item) return world.upgradeLists[item.Link] end or nil
   g.PawnIsItemAnItemLevelUpgrade = world.pawn and
     function(item) return world.ilvlDiffs[item.Link] end or nil
   g.PawnGetAllScalesEx = world.pawn and
     function() return world.scales end or nil
   g.PawnUnenchantItemLink = world.pawn and
-    function(link) return link end or nil
+    function(link, evenIf)
+      if type(link) ~= "string" then return nil end
+      local target = link:match("|H(.-)|h") or link
+      local _, _, id, e, g1, g2, g3, g4, rest = target:find("^item:(%-?%d+):?(%d*):?(%d*):?(%d*):?(%d*):?(%d*):?(.*)")
+      if not id then return nil end
+      if evenIf or (e ~= "0" and e ~= "" and e ~= nil) or (g1 ~= "0" and g1 ~= "" and g1 ~= nil)
+          or (g2 ~= "0" and g2 ~= "" and g2 ~= nil) or (g3 ~= "0" and g3 ~= "" and g3 ~= nil)
+          or (g4 ~= "0" and g4 ~= "" and g4 ~= nil) then
+        return "item:" .. id .. "::::::" .. (rest or "")
+      end
+      return nil
+    end or nil
+  g.PawnGetBestItemLink = world.pawn and
+    function(scale, invType, index, doNotRescan)
+      world.bestLinkCalls[#world.bestLinkCalls + 1] =
+        { scale = scale, invType = invType, index = index, doNotRescan = doNotRescan }
+      return (world.bestLinks[scale] or {})[invType]
+    end or nil
   g.PawnIsArmorBestTypeForPlayer = world.pawn and
     function(item)
       local b = world.armorBest[item.Link]
@@ -205,7 +222,8 @@ local function newWorld()
   return { bags = {}, slots = {}, minLevels = {}, levels = {}, classIDs = {}, subclassIDs = {}, time = 1000,
            equippedSlots = {}, equipped = {}, printed = {}, timers = {},
            inCombat = false, pawn = true, pawnNil = {}, upgradeLists = {},
-           armorBest = {}, bestFor = {}, rarities = {}, uniqueness = {},
+           armorBest = {}, rarities = {}, uniqueness = {},
+           bestLinks = {}, bestLinkCalls = {}, canEquip = {},
            setIDs = {}, itemIDs = {}, setBonusSpells = {}, setNames = {},
            specIndex = nil, specID = nil, lastBonusSpec = nil,
            ilvlDiffs = {}, scales = {}, savedVars = nil, playerLevel = 80,
@@ -1016,7 +1034,7 @@ do
       "spells", "specID", "itemID", "setID", "ctx", "threshold",
       "okIdx", "okID", "idx", "label", "otherHeld",
       "candID", "otherID", "isUnique", "okItem", "okUp", "bestFor",
-      "weaker", "best" }) do
+      "weaker", "best", "bestSlot" }) do
     check("no leaked global: " .. leaked, w.env[leaked] == nil)
   end
   check("slash global registered", w.env.SLASH_VOCGEAR1 == "/vg")
@@ -1763,24 +1781,27 @@ do
 end
 
 -- 68. Rings: Pawn's named replacement no longer worn -> displace the ring
--- Pawn doesn't call best.
+-- that isn't Pawn's best.
 do
   local w = newWorld()
   w.savedVars = { autoTwoSlot = true }
   local ringA = "|cff0070dd|Hitem:100|h[Ring A]|h|r" -- Pawn's best for A
   local ringB = "|cff0070dd|Hitem:101|h[Ring B]|h|r"
-  local gone = "|cff0070dd|Hitem:109|h[Old Ring]|h|r" -- historical 2nd-best, unworn
+  local gone = "item:109::::::" -- historical 2nd-best, unworn (Pawn sends it bare)
   local cand = "|cffa335ee|Hitem:102|h[Ring C]|h|r"
   w.equippedSlots[11], w.equippedSlots[12] = ringA, ringB
   w.bags[0] = { cand }
   w.slots[cand] = "INVTYPE_FINGER"
   w.upgradeLists[cand] = upgrade("A", 0.05, gone)
-  w.bestFor[ringA] = { A = true }
+  w.bestLinks.A = { INVTYPE_FINGER = "item:100::::::" }
   local ns = loadAddon(w)
   clientLoaded(w)
   ns.scan()
   check("best-aware ring equips", #w.equipped == 1)
   check("non-best slot targeted", w.equipped[1].slot == 12)
+  check("best lookup skips rescan", w.bestLinkCalls[1].doNotRescan == true
+    and w.bestLinkCalls[1].index == 1 and w.bestLinkCalls[1].scale == "A"
+    and w.bestLinkCalls[1].invType == "INVTYPE_FINGER")
 end
 
 -- 69. Mirror: best in the second slot -> the first slot takes the upgrade.
@@ -1789,13 +1810,13 @@ do
   w.savedVars = { autoTwoSlot = true }
   local ringA = "|cff0070dd|Hitem:100|h[Ring A]|h|r"
   local ringB = "|cff0070dd|Hitem:101|h[Ring B]|h|r" -- Pawn's best for A
-  local gone = "|cff0070dd|Hitem:109|h[Old Ring]|h|r"
+  local gone = "item:109::::::"
   local cand = "|cffa335ee|Hitem:102|h[Ring C]|h|r"
   w.equippedSlots[11], w.equippedSlots[12] = ringA, ringB
   w.bags[0] = { cand }
   w.slots[cand] = "INVTYPE_FINGER"
   w.upgradeLists[cand] = upgrade("A", 0.05, gone)
-  w.bestFor[ringB] = { A = true }
+  w.bestLinks.A = { INVTYPE_FINGER = "item:101::::::" }
   local ns = loadAddon(w)
   clientLoaded(w)
   ns.scan()
@@ -1803,20 +1824,20 @@ do
   check("first slot targeted", w.equipped[1].slot == 11)
 end
 
--- 70. Best-for-another-scale doesn't count: falls back to item level.
+-- 70. Best tracked for another scale only: falls back to item level.
 do
   local w = newWorld()
   w.savedVars = { autoTwoSlot = true }
   local ringA = "|cff0070dd|Hitem:100|h[Ring A]|h|r" -- ilvl 100
   local ringB = "|cff0070dd|Hitem:101|h[Ring B]|h|r" -- ilvl 90, best for Other
-  local gone = "|cff0070dd|Hitem:109|h[Old Ring]|h|r"
+  local gone = "item:109::::::"
   local cand = "|cffa335ee|Hitem:102|h[Ring C]|h|r" -- ilvl 95
   w.equippedSlots[11], w.equippedSlots[12] = ringA, ringB
   w.levels[ringA], w.levels[ringB], w.levels[cand] = 100, 90, 95
   w.bags[0] = { cand }
   w.slots[cand] = "INVTYPE_FINGER"
   w.upgradeLists[cand] = upgrade("A", 0.05, gone)
-  w.bestFor[ringB] = { Other = true }
+  w.bestLinks.Other = { INVTYPE_FINGER = "item:101::::::" }
   local ns = loadAddon(w)
   clientLoaded(w)
   ns.scan()
@@ -1824,66 +1845,80 @@ do
   check("ilvl weaker slot targeted", w.equipped[1].slot == 12)
 end
 
--- 71. Unanswerable best query fails open to item level.
+-- 71. No best data (tracking off / unscanned): falls back to item level.
 do
   local w = newWorld()
   w.savedVars = { autoTwoSlot = true }
-  local ringA = "|cff0070dd|Hitem:100|h[Ring A]|h|r" -- ilvl 100, data unknown
-  local ringB = "|cff0070dd|Hitem:101|h[Ring B]|h|r" -- ilvl 90, best for A
-  local gone = "|cff0070dd|Hitem:109|h[Old Ring]|h|r"
+  local ringA = "|cff0070dd|Hitem:100|h[Ring A]|h|r" -- ilvl 100
+  local ringB = "|cff0070dd|Hitem:101|h[Ring B]|h|r" -- ilvl 90
+  local gone = "item:109::::::"
   local cand = "|cffa335ee|Hitem:102|h[Ring C]|h|r" -- ilvl 95
   w.equippedSlots[11], w.equippedSlots[12] = ringA, ringB
   w.levels[ringA], w.levels[ringB], w.levels[cand] = 100, 90, 95
-  w.pawnNil[ringA] = true
   w.bags[0] = { cand }
   w.slots[cand] = "INVTYPE_FINGER"
   w.upgradeLists[cand] = upgrade("A", 0.05, gone)
-  w.bestFor[ringB] = { A = true }
   local ns = loadAddon(w)
   clientLoaded(w)
   ns.scan()
-  check("unsure best falls back", #w.equipped == 1)
+  check("missing best falls back", #w.equipped == 1)
   check("fallback targets ilvl weaker", w.equipped[1].slot == 12)
 end
-
--- 72. Malformed best answers fail open, never wedge the scan.
-do -- garbage where the other ring IS best: not "not best"
+do -- older Pawn without the best-link API: same fallback
   local w = newWorld()
   w.savedVars = { autoTwoSlot = true }
   local ringA = "|cff0070dd|Hitem:100|h[Ring A]|h|r" -- ilvl 100
-  local ringB = "|cff0070dd|Hitem:101|h[Ring B]|h|r" -- ilvl 90, best for A
-  local gone = "|cff0070dd|Hitem:109|h[Old Ring]|h|r"
+  local ringB = "|cff0070dd|Hitem:101|h[Ring B]|h|r" -- ilvl 90
+  local gone = "item:109::::::"
   local cand = "|cffa335ee|Hitem:102|h[Ring C]|h|r" -- ilvl 95
   w.equippedSlots[11], w.equippedSlots[12] = ringA, ringB
   w.levels[ringA], w.levels[ringB], w.levels[cand] = 100, 90, 95
   w.bags[0] = { cand }
   w.slots[cand] = "INVTYPE_FINGER"
   w.upgradeLists[cand] = upgrade("A", 0.05, gone)
-  w.bestFor[ringA] = "not-a-table"
-  w.bestFor[ringB] = { A = true }
   local ns = loadAddon(w)
   clientLoaded(w)
+  w.env.PawnGetBestItemLink = nil -- older Pawn
   ns.scan()
-  check("malformed best falls back", #w.equipped == 1 and w.equipped[1].slot == 12)
-  check("scan not wedged", ns.scanning == false)
+  check("missing best-link API fails open", #w.equipped == 1 and w.equipped[1].slot == 12)
 end
-do -- garbage alone: not "best" either
+
+-- 72. Malformed best answers fail open; best held twice is no call.
+do -- non-string best link: not a link at all
   local w = newWorld()
   w.savedVars = { autoTwoSlot = true }
   local ringA = "|cff0070dd|Hitem:100|h[Ring A]|h|r" -- ilvl 90
   local ringB = "|cff0070dd|Hitem:101|h[Ring B]|h|r" -- ilvl 100
-  local gone = "|cff0070dd|Hitem:109|h[Old Ring]|h|r"
+  local gone = "item:109::::::"
   local cand = "|cffa335ee|Hitem:102|h[Ring C]|h|r" -- ilvl 95
   w.equippedSlots[11], w.equippedSlots[12] = ringA, ringB
   w.levels[ringA], w.levels[ringB], w.levels[cand] = 90, 100, 95
   w.bags[0] = { cand }
   w.slots[cand] = "INVTYPE_FINGER"
   w.upgradeLists[cand] = upgrade("A", 0.05, gone)
-  w.bestFor[ringA] = "not-a-table"
+  w.bestLinks.A = { INVTYPE_FINGER = 42 }
   local ns = loadAddon(w)
   clientLoaded(w)
   ns.scan()
-  check("lone malformed best falls back", #w.equipped == 1 and w.equipped[1].slot == 11)
+  check("malformed best falls back", #w.equipped == 1 and w.equipped[1].slot == 11)
+  check("scan not wedged", ns.scanning == false)
+end
+do -- duplicate pair: best matches both slots, so no call
+  local w = newWorld()
+  w.savedVars = { autoTwoSlot = true }
+  local ringA = "|cff0070dd|Hitem:100|h[Ring A]|h|r" -- ilvl 90, worn twice
+  local gone = "item:109::::::"
+  local cand = "|cffa335ee|Hitem:102|h[Ring C]|h|r" -- ilvl 95
+  w.equippedSlots[11], w.equippedSlots[12] = ringA, ringA
+  w.levels[ringA], w.levels[cand] = 90, 95
+  w.bags[0] = { cand }
+  w.slots[cand] = "INVTYPE_FINGER"
+  w.upgradeLists[cand] = upgrade("A", 0.05, gone)
+  w.bestLinks.A = { INVTYPE_FINGER = "item:100::::::" }
+  local ns = loadAddon(w)
+  clientLoaded(w)
+  ns.scan()
+  check("duplicate best falls back", #w.equipped == 1 and w.equipped[1].slot == 11)
 end
 
 -- 73. Trinkets skip the best tier: no score tracking upstream. (Real Pawn
@@ -1893,19 +1928,65 @@ do
   w.savedVars = { autoTwoSlot = true }
   local trinkA = "|cff0070dd|Hitem:200|h[Trinket A]|h|r" -- ilvl 90
   local trinkB = "|cff0070dd|Hitem:201|h[Trinket B]|h|r" -- ilvl 100, "best"
-  local gone = "|cff0070dd|Hitem:209|h[Old Trinket]|h|r"
+  local gone = "item:209::::::"
   local cand = "|cffa335ee|Hitem:202|h[Trinket C]|h|r" -- ilvl 95
   w.equippedSlots[13], w.equippedSlots[14] = trinkA, trinkB
   w.levels[trinkA], w.levels[trinkB], w.levels[cand] = 90, 100, 95
   w.bags[0] = { cand }
   w.slots[cand] = "INVTYPE_TRINKET"
   w.upgradeLists[cand] = upgrade("A", 0.05, gone)
-  w.bestFor[trinkB] = { A = true }
+  w.bestLinks.A = { INVTYPE_TRINKET = "item:201::::::" }
   local ns = loadAddon(w)
   clientLoaded(w)
   ns.scan()
   check("trinket ignores best claims", #w.equipped == 1)
   check("trinket uses ilvl weaker", w.equipped[1].slot == 13)
+  check("trinket never consults best", #w.bestLinkCalls == 0)
+end
+
+-- 74. Pawn's bare-form replacement matches an unenchanted held ring.
+-- (Live, ExistingItemLink is bare "item:..." while held links are full;
+-- without EvenIfNotEnchanted the two forms never compare equal.)
+do
+  local w = newWorld()
+  w.savedVars = { autoTwoSlot = true }
+  local ringA = "|cff0070dd|Hitem:100|h[Ring A]|h|r"
+  local ringB = "|cff0070dd|Hitem:101|h[Ring B]|h|r"
+  local cand = "|cffa335ee|Hitem:102|h[Ring C]|h|r"
+  w.equippedSlots[11], w.equippedSlots[12] = ringA, ringB
+  w.bags[0] = { cand }
+  w.slots[cand] = "INVTYPE_FINGER"
+  w.upgradeLists[cand] = upgrade("A", 0.05, "item:101::::::")
+  local ns = loadAddon(w)
+  clientLoaded(w)
+  ns.scan()
+  check("bare existing matches held", #w.equipped == 1)
+  check("named slot targeted", w.equipped[1].slot == 12)
+end
+
+-- 75. Score verdicts for unwieldable items never equip, silently.
+do
+  local w = newWorld()
+  local sword = "|cffa335ee|Hitem:901|h[Sword]|h|r"
+  w.bags[0] = { sword }
+  w.slots[sword] = "INVTYPE_WEAPON"
+  w.upgradeLists[sword] = upgrade("A", 0.05)
+  w.canEquip[sword] = false
+  local ns = loadAddon(w)
+  ns.scan()
+  check("unwieldable not equipped", #w.equipped == 0)
+  check("unwieldable silent", #w.printed == 0)
+end
+do -- control: wieldable verdicts still equip
+  local w = newWorld()
+  local sword = "|cffa335ee|Hitem:901|h[Sword]|h|r"
+  w.bags[0] = { sword }
+  w.slots[sword] = "INVTYPE_WEAPON"
+  w.upgradeLists[sword] = upgrade("A", 0.05)
+  w.canEquip[sword] = true
+  local ns = loadAddon(w)
+  ns.scan()
+  check("wieldable equips", #w.equipped == 1)
 end
 
 print("tests/run.lua: " .. passed .. " checks passed")

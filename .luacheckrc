@@ -34,7 +34,7 @@ read_globals = {
   "PawnGetAllScalesEx", "PawnGetItemData", "PawnIsArmorBestTypeForPlayer",
   "PawnIsItemAnItemLevelUpgrade", "PawnIsItemAnUpgrade",
   "PawnUI_InventoryPawnButton", "PawnUI_InventoryPawnButton_Move",
-  "PawnUnenchantItemLink",
+  "PawnUnenchantItemLink", "PawnGetBestItemLink",
 }
 
 files["tests/**"] = {

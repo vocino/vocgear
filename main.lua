@@ -125,6 +125,13 @@ function ns.evaluatePawn(link)
   local ok, item = pcall(_G.PawnGetItemData, link)
   if not ok or not item or item.Link == nil then return nil end
   local result = { upgrade = false, itemLevel = item.Level }
+  -- Wield gate. Pawn's score path never checks CanEquip (only its
+  -- item-level path does, Pawn.lua:4847), so an unwieldable item whose
+  -- secondaries have value can arrive here flagged: a weaponless
+  -- character's first drop is the crisp case (no best data, any value
+  -- reads as a big upgrade, Pawn.lua:3769). The client would refuse the
+  -- equip, so read it as no upgrade instead. A missing field fails open.
+  if item.CanEquip == false then return result end
   local okUp, upgrades = pcall(_G.PawnIsItemAnUpgrade, item)
   if not okUp then return nil end
   if type(upgrades) == "table" then
@@ -235,9 +242,14 @@ function ns.armorBest(item)
   return ok and best
 end
 
+-- Canonicalize for comparison the way Pawn does: EvenIfNotEnchanted
+-- forces the bare item:... form on both sides, so an unenchanted held
+-- item still matches Pawn's named replacement (without it only
+-- enchanted/gemmed held items match: the fallback compares a full link
+-- against Pawn's bare form and never equals).
 function ns.unenchant(link)
   if type(_G.PawnUnenchantItemLink) == "function" then
-    local ok, stripped = pcall(_G.PawnUnenchantItemLink, link)
+    local ok, stripped = pcall(_G.PawnUnenchantItemLink, link, true)
     if ok and stripped then return stripped end
   end
   return link
@@ -483,43 +495,41 @@ function ns.announceSetBreak(link, breakSet, threshold)
   end
 end
 
--- Pawn's best/second-best verdicts for rings. Pawn tracks a per-scale best
--- and second-best ring (PawnFindBestItems, Pawn.lua:3861) and reports them
--- via PawnIsItemAnUpgrade's 3rd/4th returns; its tooltips annotate them as
--- "your best" / "your second best". Upgrade tracking remembers best-ever,
--- not best-current, so a flagged upgrade's named replacement is sometimes
--- a ring no longer worn; the equipped ring Pawn does NOT call best is then
--- the one it displaces. (One-handed weapons have the same tracking
--- upstream, but VocGear doesn't two-slot-manage weapons.)
---
--- True when Pawn calls link the best for scaleName, false when it
--- doesn't, nil when Pawn can't answer yet. Unsure and malformed read as
--- nil (fail open: the caller falls back to item level, never an error).
-function ns.pawnBestFor(link, scaleName)
-  local okItem, item = pcall(_G.PawnGetItemData, link)
-  if not okItem or not item or item.Link == nil then return nil end
-  local okUp, _, _, bestFor = pcall(_G.PawnIsItemAnUpgrade, item)
-  if not okUp then return nil end
-  if bestFor == nil then return false end
-  if type(bestFor) ~= "table" then return nil end
-  return bestFor[scaleName] == true
+-- Pawn's best ring for a scale, via its own best-item lookup
+-- (PawnGetBestItemLink, Pawn.lua:5910): the link behind the "your best"
+-- tooltip line. DoNotRescan keeps VocGear from triggering Pawn's
+-- equipment-set scan; missing data reads as nil and the caller falls
+-- back. Without the flag Pawn rescans and still returns nil anyway
+-- (a stale local at Pawn.lua:5929), so the flag loses nothing. Missing
+-- API (older Pawn) fails open the same way. (One-handed weapons have
+-- the same lookup upstream, but VocGear does not two-slot-manage them.)
+function ns.pawnBestLink(scaleName)
+  if type(_G.PawnGetBestItemLink) ~= "function" then return nil end
+  local ok, link = pcall(_G.PawnGetBestItemLink, scaleName, "INVTYPE_FINGER", 1, true)
+  if not ok then return nil end
+  return link
 end
 
--- The equipped ring slot a scored upgrade displaces, via Pawn's own
--- verdicts: when exactly one of the pair is Pawn's best for the scale,
--- the upgrade (which beats second-best) takes the other slot. Anything
--- unsure reads as nil and the caller falls back to item level.
+-- The equipped ring slot a scored upgrade displaces, via Pawn's own best
+-- ring: when exactly one of the pair is Pawn's best for the scale, the
+-- upgrade (which beats second-best) takes the other slot. Best worn
+-- nowhere (upgrade tracking remembers best-ever) or held twice reads as
+-- nil, as does anything unsure, and the caller falls back to item level.
 function ns.weakerRingSlot(pair, scaleName)
   if type(scaleName) ~= "string" or scaleName == "" then return nil end
-  local best = {}
+  local best = ns.pawnBestLink(scaleName)
+  if type(best) ~= "string" then return nil end
+  local bestSlot
   for _, slotID in ipairs(pair) do
     local held = GetInventoryItemLink("player", slotID)
     if not held then return nil end -- caller tries empty slots first
-    best[slotID] = ns.pawnBestFor(held, scaleName)
-    if best[slotID] == nil then return nil end
+    if ns.unenchant(held) == best then
+      if bestSlot then return nil end -- best held twice: no call
+      bestSlot = slotID
+    end
   end
-  if best[pair[1]] and not best[pair[2]] then return pair[2] end
-  if best[pair[2]] and not best[pair[1]] then return pair[1] end
+  if bestSlot == pair[1] then return pair[2] end
+  if bestSlot == pair[2] then return pair[1] end
   return nil
 end
 
