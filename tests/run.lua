@@ -75,7 +75,7 @@ local function loadAddon(world)
     INVTYPE_WRIST = 9, INVTYPE_HAND = 10, INVTYPE_CLOAK = 15, INVTYPE_WEAPON = 16,
     INVTYPE_SHIELD = 17, INVTYPE_2HWEAPON = 16, INVTYPE_WEAPONMAINHAND = 16,
     INVTYPE_WEAPONOFFHAND = 17, INVTYPE_HOLDABLE = 17, INVTYPE_RANGED = 16 }
-  g.EquipItemByName = function(item, slot)
+  local equipStub = function(item, slot)
     world.equipped[#world.equipped + 1] = { item = item, slot = slot }
     -- Like the real client, the equipped item leaves the bags.
     for _, b in pairs(world.bags) do
@@ -94,6 +94,7 @@ local function loadAddon(world)
       end
     end
   end
+  g.C_Item.EquipItemByName = equipStub -- C_Item.EquipItemByName, ItemDocumentation
   g.GetInventoryItemLink = function(_, slot) return world.equippedSlots[slot] end
   g.C_Timer = {
     After = function(_, fn) world.timers[#world.timers + 1] = fn end,
@@ -2123,6 +2124,23 @@ do
     w.env.C_AddOns = nil
     return ns.pawnPending() == false
   end)())
+end
+
+-- 66. The equip call lives in C_Item; a client without it announces
+-- once and never errors or loops.
+do
+  local w = newWorld()
+  local link = "|cffa335ee|Hitem:900|h[Helm]|h|r"
+  w.bags[0] = { link }
+  w.slots[link] = "INVTYPE_HEAD"
+  w.upgradeLists[link] = upgrade("A", 0.05)
+  local ns = loadAddon(w)
+  w.env.C_Item.EquipItemByName = nil
+  ns.scan()
+  ns.scan()
+  check("no namespace: nothing equipped, no error", #w.equipped == 0)
+  check("no namespace: announced once", #w.printed == 1
+    and w.printed[1]:find("C_Item.EquipItemByName is missing", 1, true) ~= nil)
 end
 
 print("tests/run.lua: " .. passed .. " checks passed")
