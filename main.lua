@@ -483,9 +483,50 @@ function ns.announceSetBreak(link, breakSet, threshold)
   end
 end
 
+-- Pawn's best/second-best verdicts for rings. Pawn tracks a per-scale best
+-- and second-best ring (PawnFindBestItems, Pawn.lua:3861) and reports them
+-- via PawnIsItemAnUpgrade's 3rd/4th returns; its tooltips annotate them as
+-- "your best" / "your second best". Upgrade tracking remembers best-ever,
+-- not best-current, so a flagged upgrade's named replacement is sometimes
+-- a ring no longer worn; the equipped ring Pawn does NOT call best is then
+-- the one it displaces. (One-handed weapons have the same tracking
+-- upstream, but VocGear doesn't two-slot-manage weapons.)
+--
+-- True when Pawn calls link the best for scaleName, false when it
+-- doesn't, nil when Pawn can't answer yet. Unsure and malformed read as
+-- nil (fail open: the caller falls back to item level, never an error).
+function ns.pawnBestFor(link, scaleName)
+  local okItem, item = pcall(_G.PawnGetItemData, link)
+  if not okItem or not item or item.Link == nil then return nil end
+  local okUp, _, _, bestFor = pcall(_G.PawnIsItemAnUpgrade, item)
+  if not okUp then return nil end
+  if bestFor == nil then return false end
+  if type(bestFor) ~= "table" then return nil end
+  return bestFor[scaleName] == true
+end
+
+-- The equipped ring slot a scored upgrade displaces, via Pawn's own
+-- verdicts: when exactly one of the pair is Pawn's best for the scale,
+-- the upgrade (which beats second-best) takes the other slot. Anything
+-- unsure reads as nil and the caller falls back to item level.
+function ns.weakerRingSlot(pair, scaleName)
+  if type(scaleName) ~= "string" or scaleName == "" then return nil end
+  local best = {}
+  for _, slotID in ipairs(pair) do
+    local held = GetInventoryItemLink("player", slotID)
+    if not held then return nil end -- caller tries empty slots first
+    best[slotID] = ns.pawnBestFor(held, scaleName)
+    if best[slotID] == nil then return nil end
+  end
+  if best[pair[1]] and not best[pair[2]] then return pair[2] end
+  if best[pair[2]] and not best[pair[1]] then return pair[1] end
+  return nil
+end
+
 -- Which slot should a two-slot upgrade go into? Prefers the slot holding
--- the item Pawn says it replaces; falls back to the empty or weaker slot.
--- Returns a slot ID, or nil (can't resolve -> announce instead).
+-- the item Pawn says it replaces, then the empty slot, then (rings with
+-- a scored verdict) the slot Pawn does not call best, then the weaker
+-- slot by item level. Returns a slot ID, or nil (announce instead).
 function ns.resolveTwoSlotSlot(equipLoc, ev, link)
   local pair = ns.slotPairs[equipLoc]
   if not pair then return nil end
@@ -504,8 +545,15 @@ function ns.resolveTwoSlotSlot(equipLoc, ev, link)
   for _, slotID in ipairs(pair) do
     if not held[slotID] then return slotID end
   end
-  -- Both full, no Pawn-provided target (item-level path): take the weaker
-  -- slot, but only if the candidate actually beats it.
+  -- Both full. Rings with a scored verdict ask Pawn which equipped ring
+  -- is best before item level does (trinkets have no score tracking
+  -- upstream, so they skip straight to it).
+  if equipLoc == "INVTYPE_FINGER" and ev.scaleName then
+    local weaker = ns.weakerRingSlot(pair, ev.scaleName)
+    if weaker then return weaker end
+  end
+  -- Still unresolved: take the weaker slot by item level, but only if
+  -- the candidate actually beats it.
   local candLevel = ev.itemLevel or C_Item.GetDetailedItemLevelInfo(link)
   if not candLevel then return nil end
   local weakSlot, weakLevel
