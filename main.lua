@@ -642,6 +642,24 @@ function ns.equip(link, ev, slotID)
     end
     return false
   end
+  -- Settle: never displace what WE just equipped. The check slot is the
+  -- forced two-slot target, or the single-slot item's home slot; unknown
+  -- slots fail open to the old behavior. Empty slots are exempt: with
+  -- nothing to displace there is no churn to prevent.
+  local checkSlot = slotID
+  if not checkSlot then
+    local _, _, _, equipLoc = C_Item.GetItemInfoInstant(link)
+    checkSlot = equipLoc and ns.primarySlot[equipLoc]
+  end
+  if checkSlot and ns.slotSettling(checkSlot, GetTime())
+      and GetInventoryItemLink("player", checkSlot) then
+    if o.announce and not ns.flagged[link] then
+      ns.flagged[link] = true
+      ns.say("would equip " .. link .. ns.why(ev) .. " (slot settling)")
+    end
+    ns.retrySoon() -- re-check once the slot settles, no bag event needed
+    return false
+  end
   ns.ourEquipPending = true
   if slotID then EquipItemByName(link, slotID) else EquipItemByName(link) end
   ns.playEquipSound()
@@ -654,8 +672,13 @@ ns.scanning = false
 
 -- Loop guard: gear just swapped out is left alone for a while, so A->B->A
 -- ping-pong (multi-scale verdicts, weapon-slot ambiguity, stale Pawn data
--- right after an equip) can't run forever.
+-- right after an equip) can't run forever. Slots WE just equipped into
+-- also settle before taking another equip: Pawn refreshes best-item data
+-- on a 250ms throttle (Pawn.lua:4145), so the immediate post-equip rescan
+-- prices every leftover candidate against the old baseline and would
+-- otherwise funnel each into the same slot in turn.
 ns.SWAP_COOLDOWN = 30 -- seconds a displaced link is skipped
+ns.SETTLE_WINDOW = 10 -- seconds a slot we equipped into is left alone
 ns.BREAKER_WINDOW = 60 -- sliding window for same-slot re-equips
 ns.BREAKER_TRIPS = 3 -- our equips to one slot in-window that pause auto-equip
 ns.BREAKER_PAUSE = 60 -- pause length in seconds
@@ -708,6 +731,17 @@ function ns.trackSwaps()
   for link, t in pairs(ns.recentSwap) do
     if now - t >= ns.SWAP_COOLDOWN then ns.recentSwap[link] = nil end
   end
+end
+
+-- True while the slot is settling after one of OUR equips (manual swaps
+-- are never attributed, so they never start a settle). A touch recorded
+-- this scan reads as brand new: the displacement was only just observed.
+function ns.slotSettling(slotID, now)
+  if not slotID then return false end
+  for _, t in ipairs(ns.slotTouches[slotID] or {}) do
+    if now - t < ns.SETTLE_WINDOW then return true end
+  end
+  return false
 end
 
 function ns.isPaused()
