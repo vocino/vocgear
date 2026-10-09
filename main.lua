@@ -694,8 +694,19 @@ function ns.equip(link, ev, slotID)
     ns.retrySoon() -- re-check once the slot settles, no bag event needed
     return false
   end
+  -- C_Item.EquipItemByName(itemInfo, dstSlot) (ItemDocumentation, live
+  -- and forever). The bare EquipItemByName left with the 11.0 shims and
+  -- exists on neither client, so a missing namespace is announced once
+  -- instead of erroring on every scan.
+  if not (type(C_Item) == "table" and type(C_Item.EquipItemByName) == "function") then
+    if not ns.flagged[link] then
+      ns.flagged[link] = true
+      ns.say("cannot equip on this client (C_Item.EquipItemByName is missing): " .. link)
+    end
+    return false
+  end
   ns.ourEquipPending = true
-  if slotID then EquipItemByName(link, slotID) else EquipItemByName(link) end
+  if slotID then C_Item.EquipItemByName(link, slotID) else C_Item.EquipItemByName(link) end
   ns.playEquipSound()
   if o.announce then ns.say("equipped " .. link .. ns.why(ev)) end
   return true
