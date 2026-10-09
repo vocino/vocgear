@@ -50,12 +50,14 @@ local function loadAddon(world)
   g.UnitLevel = function() return world.playerLevel end
   g.UnitClass = function() return "Warrior", world.playerClass or "WARRIOR" end
   g.PlaySound = function(id) world.playedSounds[#world.playedSounds + 1] = id end
-  g.IsAddOnLoaded = function(n) return world.loadedAddons and world.loadedAddons[n] or nil end
-  g.GetAddOnInfo = function(n)
-    local a = world.installedAddons and world.installedAddons[n]
-    if not a then return nil end
-    return n, n, "", a.loadable
-  end
+  g.C_AddOns = {
+    IsAddOnLoaded = function(n) return world.loadedAddons and world.loadedAddons[n] or false end,
+    GetAddOnInfo = function(n)
+      local a = world.installedAddons and world.installedAddons[n]
+      if not a then return nil end
+      return n, n, "", a.loadable
+    end,
+  }
   g.CreateSettingsListSectionHeaderInitializer = function(text)
     world.headerNotes[#world.headerNotes + 1] = text
     return {}
@@ -110,8 +112,9 @@ local function loadAddon(world)
     return f
   end
   g.GameTooltip = {
-    SetOwner = function() end,
-    SetText = function(_, t) world.gametip.text = t end,
+    SetOwner = function(_, owner, anchor) world.gametip.owner, world.gametip.anchor = owner, anchor end,
+    SetText = function(_, t, r, gg, b) world.gametip.text = t world.gametip.titleColor = { r, gg, b } end,
+    AddLine = function(_, t) world.gametip.lines[#world.gametip.lines + 1] = t end,
     Show = function() world.gametip.shown = true end,
     Hide = function() world.gametip.shown = false end,
   }
@@ -229,7 +232,7 @@ local function newWorld()
            ilvlDiffs = {}, scales = {}, savedVars = nil, playerLevel = 80,
            withSettings = false, settingsReg = {}, settingsChecks = 0,
            settingsSliders = 0, settingsDropdowns = {}, settingCallbacks = {},
-           frames = {}, gametip = {}, withPaperDoll = false,
+           frames = {}, gametip = { lines = {} }, withPaperDoll = false,
            hooks = {}, pawnBtn = nil, playerClass = nil,
            loadedAddons = nil, installedAddons = nil, headerNotes = {},
            playedSounds = {} }
@@ -610,6 +613,11 @@ do
   check("/vg off sets explicitly", ns.opts().enabled == false)
   w.env.SlashCmdList.VOCGEAR("announce")
   check("/vg announce toggles", ns.opts().announce == false)
+  check("toggles confirm with the checkbox pair (numeric fallback, no SOUNDKIT)",
+    table.concat(w.playedSounds, ",") == "857,856,857,857")
+  w.env.SOUNDKIT = { IG_MAINMENU_OPTION_CHECKBOX_ON = 1856 }
+  w.env.SlashCmdList.VOCGEAR("announce")
+  check("SOUNDKIT name wins over the fallback", w.playedSounds[#w.playedSounds] == 1856)
   w.env.SlashCmdList.VOCGEAR("config")
   check("/vg config prints hint without Settings",
     w.printed[#w.printed]:find("Settings > AddOns", 1) ~= nil)
@@ -865,7 +873,11 @@ do
   check("button click scans", #w.equipped == 1)
   ns.sheetButton.scripts.OnEnter(ns.sheetButton)
   check("tooltip shows", w.gametip.shown == true)
-  check("tooltip text", (w.gametip.text or ""):find("best gear in bags", 1) ~= nil)
+  check("tooltip title", w.gametip.text == "Check Bags"
+    and w.gametip.titleColor[1] == 1 and w.gametip.titleColor[2] == 0.82 and w.gametip.titleColor[3] == 0)
+  check("tooltip line", (w.gametip.lines[1] or ""):find("best gear in your bags", 1) ~= nil)
+  check("click confirms audibly, then the equip chime",
+    w.playedSounds[1] == 856 and w.playedSounds[2] == 878)
   ns.sheetButton.scripts.OnLeave()
   check("tooltip hides", w.gametip.shown == false)
 end
@@ -2077,6 +2089,40 @@ do
   ns.scan()
   check("empty touched slot equips", #w.equipped == 2 and w.equipped[2].slot == 12)
   check("emptied slot takes the new ring", w.equipped[2].item == cand2)
+end
+
+-- 65. Addon compartment: click opens settings; hover follows the tooltip
+-- contract (gold title, what it does, the slash hint).
+do
+  local w = newWorld()
+  w.withSettings = true
+  local ns = loadAddon(w)
+  clientLoaded(w)
+  local opened
+  w.env.Settings.OpenToCategory = function(id) opened = id end
+  check("compartment globals", type(w.env.VocGear_CompartmentClick) == "function"
+    and type(w.env.VocGear_CompartmentEnter) == "function"
+    and type(w.env.VocGear_CompartmentLeave) == "function")
+  w.env.VocGear_CompartmentClick("VocGear", "LeftButton")
+  check("compartment click opens config", opened == 99)
+  local btn = {}
+  w.env.VocGear_CompartmentEnter("VocGear", btn)
+  check("compartment tooltip anchors to the button", w.gametip.owner == btn and w.gametip.shown == true)
+  check("compartment tooltip title is gold", w.gametip.text == "VocGear"
+    and w.gametip.titleColor[1] == 1 and w.gametip.titleColor[2] == 0.82)
+  check("compartment tooltip names the source and the slash", #w.gametip.lines == 2
+    and w.gametip.lines[1]:find("Pawn", 1, true) ~= nil
+    and w.gametip.lines[2]:find("/vg", 1, true) ~= nil)
+  w.env.VocGear_CompartmentLeave("VocGear", btn)
+  check("compartment leave hides the tooltip", w.gametip.shown == false)
+  w.env.Settings = nil
+  w.env.VocGear_CompartmentClick("VocGear", "LeftButton")
+  check("compartment without Settings says where",
+    w.printed[#w.printed]:find("Settings > AddOns > VocGear", 1, true) ~= nil)
+  check("no C_AddOns reads as Pawn not pending", (function()
+    w.env.C_AddOns = nil
+    return ns.pawnPending() == false
+  end)())
 end
 
 print("tests/run.lua: " .. passed .. " checks passed")

@@ -1,9 +1,11 @@
 # VocGear
 
 Pawn tells you what's an upgrade but won't act on it. VocGear is the
-muscle: when a Pawn-flagged upgrade lands in your bags, it equips it,
-out of combat, and prints the margin. A small panel of rules tunes
-what counts. Requires [Pawn](https://www.curseforge.com/wow/addons/pawn).
+muscle: when an upgrade lands in your bags, it equips it, out of
+combat, and prints the margin. With
+[Pawn](https://www.curseforge.com/wow/addons/pawn) installed, Pawn's
+stat weights decide; without it, item level does. A small panel of
+rules tunes what counts.
 
 ## Install
 
@@ -11,7 +13,8 @@ Download the latest zip from [GitHub
 Releases](https://github.com/vocino/vocgear/releases) (also on
 CurseForge and Wago), copy the folder into `Interface/AddOns`, and
 make sure it is named `VocGear` (the folder name must match the
-`.toc` file).
+`.toc` file). The same package runs on Retail and on the Forever
+client.
 
 ## Use
 
@@ -21,7 +24,8 @@ are announced by default; enable auto-equip for them and VocGear
 takes the weaker slot.
 
 A Check Bags button on the character sheet (next to Pawn's) re-runs
-the check on demand. Changing any option rescans too.
+the check on demand. Changing any option rescans too. The addon
+compartment on the minimap opens the settings.
 
 ```
 /vg            toggle auto-equip on/off
@@ -41,13 +45,19 @@ Settings > AddOns > VocGear, or `/vg config`:
 - Auto-equip rings and trinkets (default off)
 - Include item-level upgrades (default on)
 - Don't replace heirlooms (default on)
+- Prioritize set bonuses (default on)
 - Pawn scale picker (default any visible scale)
+- Equip sound (default the quest chime; Off available)
 - Character sheet button (default on)
+
+The panel's first line says which source is deciding: Pawn, or the
+built-in item-level check.
 
 ## How it works
 
-Every bag item goes through Pawn's own upgrade check, filtered by
-your scale, threshold, and item-level choices. Single-slot upgrades
+Every bag item goes through Pawn's own upgrade check (or, without
+Pawn, a plain item-level comparison against what you wear), filtered
+by your scale, threshold, and item-level choices. Single-slot upgrades
 equip at once; two-slot items (rings, trinkets) equip into the slot
 Pawn names, the empty slot, or the weaker one, and are only announced
 unless you opt in. A loop guard leaves freshly displaced gear alone
@@ -60,7 +70,7 @@ trinket whose twin is already worn is announced instead of equipped.
 ## What's inside
 
 - `main.lua`: the whole addon: scan bags, ask Pawn, equip or advise
-- `VocGear.toc`: metadata
+- `VocGear.toc` / `VocGear_Forever.toc`: metadata for Retail and the Forever client
 - `tests/run.lua`: stub-harness regression tests, no WoW client needed
 
 ## Tests
@@ -77,5 +87,7 @@ MIT
 ---
 
 Part of the Voc family: tiny addons that do one job.
-Siblings: [VocWarbank](https://github.com/vocino/vocwarbank) ·
-[VocGear](https://github.com/vocino/vocgear)
+[VocWarbank](https://github.com/vocino/vocwarbank) ·
+[VocGear](https://github.com/vocino/vocgear) ·
+[VocXP](https://github.com/vocino/vocxp) ·
+[VocVendor](https://github.com/vocino/vocvendor)
