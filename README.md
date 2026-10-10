@@ -46,7 +46,7 @@ Settings > AddOns > VocGear, or `/vg config`:
 - Include item-level upgrades (default on)
 - Don't replace heirlooms (default on)
 - Prioritize set bonuses (default on)
-- Pawn scale picker (default any visible scale)
+- Pawn scale picker (default any visible scale; pick one for that scale only)
 - Equip sound (default the quest chime; Off available)
 - Character sheet button (default on)
 

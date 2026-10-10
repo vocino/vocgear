@@ -192,7 +192,7 @@ local function loadAddon(world)
     end
     S.CreateControlTextContainer = function()
       local t = { data = {} }
-      t.Add = function(_, value, text) t.data[#t.data + 1] = { value = value, text = text } end
+      t.Add = function(_, value, text, tip) t.data[#t.data + 1] = { value = value, text = text, tip = tip } end
       t.GetData = function() return t.data end
       return t
     end
@@ -2141,6 +2141,24 @@ do
   check("no namespace: nothing equipped, no error", #w.equipped == 0)
   check("no namespace: announced once", #w.printed == 1
     and w.printed[1]:find("C_Item.EquipItemByName is missing", 1, true) ~= nil)
+end
+
+-- 79. Scale dropdown tooltips say what counts: Any spans every visible
+-- scale, a named scale counts only itself.
+do
+  local w = newWorld()
+  w.withSettings = true
+  w.scales = {
+    { Name = "PaladinHoly", LocalizedName = "Paladin: Holy", IsVisible = true },
+  }
+  loadAddon(w)
+  clientLoaded(w)
+  local data = w.settingsDropdowns[1]()
+  check("Any tooltip points at named scales",
+    data[1].value == "" and data[1].tip:find("that scale only", 1, true) ~= nil)
+  check("named tooltip counts only itself",
+    data[2].value == "PaladinHoly" and data[2].tip:find("Only count", 1, true) ~= nil
+    and data[2].tip:find("Paladin: Holy", 1, true) ~= nil)
 end
 
 print("tests/run.lua: " .. passed .. " checks passed")
