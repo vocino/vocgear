@@ -948,17 +948,17 @@ function ns.ensureSettings()
   check("autoTwoSlot", "Auto-equip rings and trinkets",
     "Equip into the weaker of the pair instead of announcing.")
   check("includeIlvl", "Include item-level upgrades",
-    "Treat Pawn's item-level-only upgrades as upgrades too.")
+    "Treat Pawn's item-level-only upgrades as upgrades too. Off means stat weights only; Pawn never scores trinkets, so they stop counting.")
   check("keepHeirlooms", "Don't replace heirlooms",
     "Keep equipped heirlooms even when something else scores higher.")
   check("protectSets", "Prioritize set bonuses",
-    "Complete set bonuses automatically and never break an active one.")
+    "Complete set bonuses automatically and never break an active one. A bonus-completing piece equips even without a Pawn verdict.")
   do
     local s = Settings.RegisterAddOnSetting(
       category, "VocGear_scale", "scale",
       db, type(defaults.scale), "Pawn scale", defaults.scale)
     Settings.CreateDropdown(category, s, ns.scaleOptions,
-      "Which Pawn scale counts. Any visible scale preserves stock behavior.")
+      "Which Pawn scale counts. Any visible scale counts whatever any of Pawn's visible scales flags; a named scale counts only that scale. Pawn's compare-window selection does not carry over here.")
     ns.onSettingChanged(s, ns.scan)
   end
   do
@@ -999,13 +999,13 @@ end
 
 function ns.scaleOptions()
   local container = Settings.CreateControlTextContainer()
-  container:Add("", "Any visible scale", "Count an upgrade for any of Pawn's visible scales.")
+  container:Add("", "Any visible scale", "Count an upgrade Pawn flags for any of its visible scales. Pick a scale below for that scale only.")
   if ns.pawnReady() then
     local ok, scales = pcall(_G.PawnGetAllScalesEx)
     if ok and type(scales) == "table" then
       for _, sc in ipairs(scales) do
         if type(sc) == "table" and sc.IsVisible and sc.Name then
-          container:Add(sc.Name, sc.LocalizedName or sc.Name, "")
+          container:Add(sc.Name, sc.LocalizedName or sc.Name, "Only count upgrades Pawn flags for " .. (sc.LocalizedName or sc.Name) .. ".")
         end
       end
     end
