@@ -37,6 +37,7 @@ local function loadAddon(world)
     end,
     GetDetailedItemLevelInfo = function(link) return world.levels[link] end,
     GetItemUniquenessByID = function(link) return world.uniqueness[link] end,
+    IsEquippableItem = function(link) return not world.notEquippable[link] end,
     GetItemSetInfo = function(setID) return world.setNames[setID] end,
     GetSetBonusesForSpecializationByItemID = function(specID, itemID)
       world.lastBonusSpec = specID
@@ -226,7 +227,7 @@ local function newWorld()
   return { bags = {}, slots = {}, minLevels = {}, levels = {}, classIDs = {}, subclassIDs = {}, time = 1000,
            equippedSlots = {}, equipped = {}, printed = {}, timers = {},
            inCombat = false, pawn = true, pawnNil = {}, upgradeLists = {},
-           armorBest = {}, rarities = {}, uniqueness = {},
+           armorBest = {}, rarities = {}, uniqueness = {}, notEquippable = {},
            bestLinks = {}, bestLinkCalls = {}, canEquip = {},
            setIDs = {}, itemIDs = {}, setBonusSpells = {}, setNames = {},
            specIndex = nil, specID = nil, lastBonusSpec = nil,
@@ -295,6 +296,7 @@ do
   check("default keepHeirlooms", o.keepHeirlooms == true)
   check("default sheetButton", o.sheetButton == true)
   check("default protectSets", o.protectSets == true)
+  check("default swapWeapons", o.swapWeapons == true)
   check("default equipSound quest chime", o.equipSound == "878")
 end
 
@@ -564,10 +566,10 @@ do
   local keys = {}
   for _, r in ipairs(w.settingsReg) do keys[r.key] = r end
   for _, k in ipairs({ "enabled", "announce", "audit", "minUpgradePct",
-      "autoTwoSlot", "includeIlvl", "keepHeirlooms", "protectSets", "scale", "sheetButton" }) do
+      "autoTwoSlot", "includeIlvl", "keepHeirlooms", "protectSets", "swapWeapons", "scale", "sheetButton" }) do
     check("setting registered: " .. k, keys[k] ~= nil)
   end
-  check("eight checkboxes", w.settingsChecks == 8)
+  check("nine checkboxes", w.settingsChecks == 9)
   check("one slider", w.settingsSliders == 1)
   check("slider range", w.sliderOpts.min == 0 and w.sliderOpts.max == 25
     and w.sliderOpts.step == 5)
@@ -583,7 +585,7 @@ do
     for _, r in ipairs(w.settingsReg) do
       if not w.settingCallbacks[r.var] then return false end
     end
-    return #w.settingsReg == 11
+    return #w.settingsReg == 12
   end)())
   local clink = "|cffa335ee|Hitem:710|h[Helm]|h|r"
   w.bags[0] = { clink }
@@ -1057,7 +1059,7 @@ do
       "spells", "specID", "itemID", "setID", "ctx", "threshold",
       "okIdx", "okID", "idx", "label", "otherHeld",
       "candID", "otherID", "isUnique", "okItem", "okUp", "bestFor",
-      "weaker", "best", "bestSlot" }) do
+      "weaker", "best", "bestSlot", "equippable", "handSwap" }) do
     check("no leaked global: " .. leaked, w.env[leaked] == nil)
   end
   check("slash global registered", w.env.SLASH_VOCGEAR1 == "/vg")
@@ -2159,6 +2161,285 @@ do
   check("named tooltip counts only itself",
     data[2].value == "PaladinHoly" and data[2].tip:find("Only count", 1, true) ~= nil
     and data[2].tip:find("Paladin: Holy", 1, true) ~= nil)
+end
+
+-- 80. Swap weapon types off: same-hand type swaps announce, never equip.
+do -- dagger over sword (both melee 1H)
+  local w = newWorld()
+  w.savedVars = { swapWeapons = false }
+  local sword = "|cff0070dd|Hitem:905|h[Sword A]|h|r"
+  local dagger = "|cffa335ee|Hitem:909|h[Dagger]|h|r"
+  w.equippedSlots[16] = sword
+  w.slots[sword], w.slots[dagger] = "INVTYPE_WEAPONMAINHAND", "INVTYPE_WEAPON"
+  w.classIDs[sword], w.subclassIDs[sword] = 2, 7
+  w.classIDs[dagger], w.subclassIDs[dagger] = 2, 15
+  w.bags[0] = { dagger }
+  w.upgradeLists[dagger] = upgrade("A", 0.05)
+  local ns = loadAddon(w)
+  clientLoaded(w)
+  ns.scan()
+  ns.scan()
+  check("off: dagger over sword not equipped", #w.equipped == 0)
+  check("off: dagger over sword announced once", #w.printed == 1)
+  check("off: type wording", w.printed[1]:find("different weapon type", 1) ~= nil)
+end
+do -- gun over bow (both ranged)
+  local w = newWorld()
+  w.savedVars = { swapWeapons = false }
+  local bow = "|cff0070dd|Hitem:903|h[Bow A]|h|r"
+  local gun = "|cffa335ee|Hitem:904|h[Gun B]|h|r"
+  w.equippedSlots[16] = bow
+  w.slots[bow], w.slots[gun] = "INVTYPE_RANGED", "INVTYPE_RANGEDRIGHT"
+  w.classIDs[bow], w.subclassIDs[bow] = 2, 2
+  w.classIDs[gun], w.subclassIDs[gun] = 2, 3
+  w.bags[0] = { gun }
+  w.upgradeLists[gun] = upgrade("A", 0.05)
+  local ns = loadAddon(w)
+  clientLoaded(w)
+  ns.scan()
+  check("off: gun over bow not equipped", #w.equipped == 0)
+  check("off: gun over bow announced", #w.printed == 1)
+end
+
+-- 81. Swap off: the same weapon type still equips.
+do -- sword over sword, across 1H equip locs
+  local w = newWorld()
+  w.savedVars = { swapWeapons = false }
+  local swA = "|cff0070dd|Hitem:905|h[Sword A]|h|r"
+  local swB = "|cffa335ee|Hitem:906|h[Sword B]|h|r"
+  w.equippedSlots[16] = swA
+  w.slots[swA], w.slots[swB] = "INVTYPE_WEAPONMAINHAND", "INVTYPE_WEAPON"
+  w.classIDs[swA], w.subclassIDs[swA] = 2, 7
+  w.classIDs[swB], w.subclassIDs[swB] = 2, 7
+  w.bags[0] = { swB }
+  w.upgradeLists[swB] = upgrade("A", 0.05)
+  local ns = loadAddon(w)
+  clientLoaded(w)
+  ns.scan()
+  check("off: sword over sword equips", #w.equipped == 1)
+end
+do -- staff over staff
+  local w = newWorld()
+  w.savedVars = { swapWeapons = false }
+  local stA = "|cff0070dd|Hitem:907|h[Staff A]|h|r"
+  local stB = "|cffa335ee|Hitem:908|h[Staff B]|h|r"
+  w.equippedSlots[16] = stA
+  w.slots[stA], w.slots[stB] = "INVTYPE_2HWEAPON", "INVTYPE_2HWEAPON"
+  w.classIDs[stA], w.subclassIDs[stA] = 2, 10
+  w.classIDs[stB], w.subclassIDs[stB] = 2, 10
+  w.bags[0] = { stB }
+  w.upgradeLists[stB] = upgrade("A", 0.05)
+  local ns = loadAddon(w)
+  clientLoaded(w)
+  ns.scan()
+  check("off: staff over staff equips", #w.equipped == 1)
+end
+
+-- 82. Swap on (the default): cross-type same-hand equips.
+do -- dagger over sword
+  local w = newWorld()
+  local sword = "|cff0070dd|Hitem:905|h[Sword A]|h|r"
+  local dagger = "|cffa335ee|Hitem:909|h[Dagger]|h|r"
+  w.equippedSlots[16] = sword
+  w.slots[sword], w.slots[dagger] = "INVTYPE_WEAPON", "INVTYPE_WEAPON"
+  w.classIDs[sword], w.subclassIDs[sword] = 2, 7
+  w.classIDs[dagger], w.subclassIDs[dagger] = 2, 15
+  w.bags[0] = { dagger }
+  w.upgradeLists[dagger] = upgrade("A", 0.05)
+  local ns = loadAddon(w)
+  ns.scan()
+  check("on: dagger over sword equips", #w.equipped == 1)
+end
+do -- gun over bow
+  local w = newWorld()
+  local bow = "|cff0070dd|Hitem:903|h[Bow A]|h|r"
+  local gun = "|cffa335ee|Hitem:904|h[Gun B]|h|r"
+  w.equippedSlots[16] = bow
+  w.slots[bow], w.slots[gun] = "INVTYPE_RANGED", "INVTYPE_RANGED"
+  w.classIDs[bow], w.subclassIDs[bow] = 2, 2
+  w.classIDs[gun], w.subclassIDs[gun] = 2, 3
+  w.bags[0] = { gun }
+  w.upgradeLists[gun] = upgrade("A", 0.05)
+  local ns = loadAddon(w)
+  ns.scan()
+  check("on: gun over bow equips", #w.equipped == 1)
+end
+do -- 2H sword over staff (same hand, different type)
+  local w = newWorld()
+  local staff = "|cff0070dd|Hitem:907|h[Staff A]|h|r"
+  local clay = "|cffa335ee|Hitem:910|h[Claymore]|h|r"
+  w.equippedSlots[16] = staff
+  w.slots[staff], w.slots[clay] = "INVTYPE_2HWEAPON", "INVTYPE_2HWEAPON"
+  w.classIDs[staff], w.subclassIDs[staff] = 2, 10
+  w.classIDs[clay], w.subclassIDs[clay] = 2, 8
+  w.bags[0] = { clay }
+  w.upgradeLists[clay] = upgrade("A", 0.05)
+  local ns = loadAddon(w)
+  ns.scan()
+  check("on: 2H sword over staff equips", #w.equipped == 1)
+end
+
+-- 83. Handedness: 1H/2H swaps equip when on, via the item-level paths
+-- (Pawn's score path never flags across the line).
+do -- staff over sword, through Pawn's own ilvl verdict
+  local w = newWorld()
+  local sword = "|cff0070dd|Hitem:905|h[Sword A]|h|r"
+  local staff = "|cffa335ee|Hitem:907|h[Staff B]|h|r"
+  w.equippedSlots[16] = sword
+  w.slots[sword], w.slots[staff] = "INVTYPE_WEAPON", "INVTYPE_2HWEAPON"
+  w.classIDs[sword], w.subclassIDs[sword] = 2, 7
+  w.classIDs[staff], w.subclassIDs[staff] = 2, 10
+  w.bags[0] = { staff }
+  w.upgradeLists[staff] = nil
+  w.ilvlDiffs[staff] = 10
+  local ns = loadAddon(w)
+  ns.scan()
+  check("on: staff over sword equips", #w.equipped == 1)
+  check("on: swap note printed", w.printed[1]:find("1H/2H swap", 1) ~= nil)
+  check("on: ilvl margin kept", w.printed[1]:find("item level %+10", 1) ~= nil)
+end
+do -- 1H over 2H in the built-in fallback
+  local w = newWorld()
+  w.pawn = false
+  local staff = "|cff0070dd|Hitem:907|h[Staff 90]|h|r"
+  local sword = "|cffa335ee|Hitem:905|h[Sword 100]|h|r"
+  w.equippedSlots[16] = staff
+  w.levels[staff], w.levels[sword] = 90, 100
+  w.bags[0] = { sword }
+  w.slots[sword] = "INVTYPE_WEAPON"
+  w.classIDs[sword], w.subclassIDs[sword] = 2, 7
+  local ns = loadAddon(w)
+  ns.scan()
+  check("fallback: higher-ilvl sword over staff equips", #w.equipped == 1)
+end
+
+-- 84. Handedness off: 1H/2H announces, never equips.
+do
+  local w = newWorld()
+  w.savedVars = { swapWeapons = false }
+  local sword = "|cff0070dd|Hitem:905|h[Sword A]|h|r"
+  local staff = "|cffa335ee|Hitem:907|h[Staff B]|h|r"
+  w.equippedSlots[16] = sword
+  w.slots[sword], w.slots[staff] = "INVTYPE_WEAPON", "INVTYPE_2HWEAPON"
+  w.classIDs[sword], w.subclassIDs[sword] = 2, 7
+  w.classIDs[staff], w.subclassIDs[staff] = 2, 10
+  w.bags[0] = { staff }
+  w.upgradeLists[staff] = nil
+  w.ilvlDiffs[staff] = 10
+  local ns = loadAddon(w)
+  clientLoaded(w)
+  ns.scan()
+  ns.scan()
+  check("off: staff over sword not equipped", #w.equipped == 0)
+  check("off: staff over sword announced once", #w.printed == 1)
+  check("off: handedness wording wins over type wording",
+    w.printed[1]:find("1H/2H swap", 1) ~= nil
+    and w.printed[1]:find("different weapon type", 1) == nil)
+end
+
+-- 85. Unusable weapons never equip, silently, on either source.
+do -- Pawn path: the client says no, the verdict is dropped
+  local w = newWorld()
+  local sword = "|cffa335ee|Hitem:901|h[Sword]|h|r"
+  w.bags[0] = { sword }
+  w.slots[sword] = "INVTYPE_WEAPON"
+  w.upgradeLists[sword] = upgrade("A", 0.05)
+  w.notEquippable[sword] = true
+  local ns = loadAddon(w)
+  ns.scan()
+  check("unusable Pawn verdict skipped", #w.equipped == 0)
+  check("unusable Pawn verdict silent", #w.printed == 0)
+end
+do -- fallback path: same gate, no Pawn involved
+  local w = newWorld()
+  w.pawn = false
+  local sword = "|cffa335ee|Hitem:901|h[Sword 100]|h|r"
+  w.levels[sword] = 100
+  w.bags[0] = { sword }
+  w.slots[sword] = "INVTYPE_WEAPON"
+  w.notEquippable[sword] = true
+  local ns = loadAddon(w)
+  ns.scan()
+  check("unusable fallback skipped", #w.equipped == 0)
+  check("unusable fallback silent", #w.printed == 0)
+end
+
+-- 86. Missing usability API fails open (status quo ante).
+do
+  local w = newWorld()
+  local sword = "|cffa335ee|Hitem:901|h[Sword]|h|r"
+  w.bags[0] = { sword }
+  w.slots[sword] = "INVTYPE_WEAPON"
+  w.upgradeLists[sword] = upgrade("A", 0.05)
+  local ns = loadAddon(w)
+  w.env.C_Item.IsEquippableItem = nil -- older client
+  ns.scan()
+  check("missing usability API fails open", #w.equipped == 1)
+end
+
+-- 87. Unknown weapon subclass fails open: off still equips.
+do
+  local w = newWorld()
+  w.savedVars = { swapWeapons = false }
+  local sword = "|cff0070dd|Hitem:905|h[Sword A]|h|r"
+  local dagger = "|cffa335ee|Hitem:909|h[Dagger]|h|r"
+  w.equippedSlots[16] = sword
+  w.slots[sword], w.slots[dagger] = "INVTYPE_WEAPON", "INVTYPE_WEAPON"
+  -- classIDs/subclassIDs unset: the item cache hasn't answered yet
+  w.bags[0] = { dagger }
+  w.upgradeLists[dagger] = upgrade("A", 0.05)
+  local ns = loadAddon(w)
+  clientLoaded(w)
+  ns.scan()
+  check("off: unknown subclass fails open", #w.equipped == 1)
+end
+
+-- 88. Gate order: the melee/ranged wording wins over the type wording.
+do
+  local w = newWorld()
+  w.savedVars = { swapWeapons = false }
+  local bow = "|cffa335ee|Hitem:900|h[Bow]|h|r"
+  local sword = "|cffa335ee|Hitem:901|h[Sword]|h|r"
+  w.equippedSlots[16] = bow
+  w.slots[bow], w.slots[sword] = "INVTYPE_RANGED", "INVTYPE_WEAPON"
+  w.classIDs[bow], w.subclassIDs[bow] = 2, 2
+  w.classIDs[sword], w.subclassIDs[sword] = 2, 7
+  w.bags[0] = { sword }
+  w.upgradeLists[sword] = upgrade("A", 0.05)
+  local ns = loadAddon(w)
+  clientLoaded(w)
+  ns.scan()
+  check("melee/ranged wording wins", w.printed[1]:find("melee/ranged swap", 1) ~= nil
+    and w.printed[1]:find("different weapon type", 1) == nil)
+end
+
+-- 89. Armor ignores the weapon option; empty weapon slots fill anyway.
+do -- helm over helm with the option off
+  local w = newWorld()
+  w.savedVars = { swapWeapons = false }
+  local held = "|cff0070dd|Hitem:500|h[Helm A]|h|r"
+  local cand = "|cffa335ee|Hitem:501|h[Helm B]|h|r"
+  w.equippedSlots[1] = held
+  w.bags[0] = { cand }
+  w.slots[cand] = "INVTYPE_HEAD"
+  w.upgradeLists[cand] = upgrade("A", 0.05)
+  local ns = loadAddon(w)
+  clientLoaded(w)
+  ns.scan()
+  check("off: armor equips", #w.equipped == 1)
+end
+do -- a first weapon fills an empty hand with the option off
+  local w = newWorld()
+  w.savedVars = { swapWeapons = false }
+  local sword = "|cffa335ee|Hitem:901|h[Sword]|h|r"
+  w.bags[0] = { sword }
+  w.slots[sword] = "INVTYPE_WEAPON"
+  w.classIDs[sword], w.subclassIDs[sword] = 2, 7
+  w.upgradeLists[sword] = upgrade("A", 0.05)
+  local ns = loadAddon(w)
+  clientLoaded(w)
+  ns.scan()
+  check("off: empty hand equips", #w.equipped == 1)
 end
 
 print("tests/run.lua: " .. passed .. " checks passed")

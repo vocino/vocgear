@@ -46,6 +46,7 @@ Settings > AddOns > VocGear, or `/vg config`:
 - Include item-level upgrades (default on)
 - Don't replace heirlooms (default on)
 - Prioritize set bonuses (default on)
+- Swap weapon types (default on)
 - Pawn scale picker (default any visible scale; pick one for that scale only)
 - Equip sound (default the quest chime; Off available)
 - Character sheet button (default on)
@@ -63,7 +64,13 @@ Pawn names, the empty slot, or the weaker one, and are only announced
 unless you opt in. A loop guard leaves freshly displaced gear alone
 for 30 seconds and pauses auto-equip for a minute if the same slot
 flips three times, so two scales can never fight over one item.
-Weapon swaps that cross the melee/ranged line (a sword for a
+With weapon swapping on, upgrades equip across types (sword to
+dagger, gun to bow) and across hands (one-hand plus off-hand to
+staff, decided by item level: neither Pawn nor item level can score a
+pair against a single weapon, so the higher level wins). Turn it off
+and VocGear keeps your current weapon types and only announces the
+rest. Weapons your class cannot use never equip. Weapon swaps that
+cross the melee/ranged line (a sword for a
 hunter's bow) are announced, never auto-equipped. A Unique-Equipped ring or
 trinket whose twin is already worn is announced instead of equipped.
 

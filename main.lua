@@ -54,6 +54,7 @@ local defaults = {
   includeIlvl = true,
   keepHeirlooms = true,
   protectSets = true,
+  swapWeapons = true,
   scale = "",
   sheetButton = true,
   equipSound = "878", -- "0" = off; others are SOUNDKIT IDs, see ns.EQUIP_SOUNDS
@@ -137,6 +138,20 @@ function ns.sourceLabel()
   return "item level"
 end
 
+-- True when the client says the player can never equip the link.
+-- C_Item.IsEquippableItem (ItemDocumentation, live and forever) reads
+-- the client's own proficiencies, so it stays accurate for every class
+-- with no table to maintain. Only an explicit no blocks: a missing API
+-- or a hiccup fails open.
+function ns.unusable(link)
+  if type(C_Item) ~= "table" or type(C_Item.IsEquippableItem) ~= "function" then
+    return false
+  end
+  local ok, equippable = pcall(C_Item.IsEquippableItem, link)
+  if not ok then return false end
+  return equippable == false
+end
+
 -- Answer "is this link an upgrade?", through Pawn when it is driving and
 -- through the built-in item-level fallback otherwise.
 -- Returns nil when unsure (data uncached or erroring), else:
@@ -146,6 +161,9 @@ function ns.evaluate(link)
   -- Min-level gate, both paths (what CheckLevel=true did on Pawn's old API).
   local _, _, _, _, minLevel = C_Item.GetItemInfo(link)
   if minLevel and UnitLevel("player") < minLevel then
+    return { upgrade = false }
+  end
+  if ns.unusable(link) then
     return { upgrade = false }
   end
   if ns.pawnActive() then
@@ -357,6 +375,61 @@ function ns.announceWeaponKind(link, ev)
   if o.announce and not ns.flagged[link] then
     ns.flagged[link] = true
     ns.say(ns.sourceLabel() .. " upgrade in bags (melee/ranged swap, not auto-equipped): " .. link .. ns.why(ev))
+  end
+end
+
+-- Handedness gate. Pawn never compares across the 1H/2H line (its
+-- score path bails either way, Pawn 2.13.16 Pawn.lua:3601-3607), so a
+-- verdict for one of these always comes from item level: the built-in
+-- fallback, or Pawn's own ilvl path, which has no handedness check
+-- (Pawn.lua:4845-4864). With "Swap weapon types" on that verdict
+-- equips, flagged "(1H/2H swap)"; with it off the swap is announced
+-- instead. Unknown hands fail open.
+ns.HAND_1H = { INVTYPE_WEAPON = true, INVTYPE_WEAPONMAINHAND = true }
+function ns.handedness(link)
+  if not link then return nil end
+  local _, _, _, equipLoc = C_Item.GetItemInfoInstant(link)
+  if equipLoc == "INVTYPE_2HWEAPON" then return "2H" end
+  if ns.HAND_1H[equipLoc] then return "1H" end
+  return nil
+end
+
+function ns.handCrosses(link, held)
+  if not held then return false end
+  local cand, cur = ns.handedness(link), ns.handedness(held)
+  if not cand or not cur then return false end
+  return cand ~= cur
+end
+
+function ns.announceHandSwap(link, ev)
+  local o = ns.opts()
+  if o.announce and not ns.flagged[link] then
+    ns.flagged[link] = true
+    ns.say("not equipping " .. link .. " (1H/2H swap, swap weapon types is off)" .. ns.why(ev))
+  end
+end
+
+-- Weapon-type gate. With "Swap weapon types" off, a weapon only
+-- displaces the same weapon type (same class and subclass: sword for
+-- sword, gun for gun); anything else is announced instead. Equip loc
+-- is ignored on purpose: a main-hand-only sword is still a sword.
+-- Unknown types fail open: an undetectable weapon still equips.
+function ns.weaponTypeCrosses(link, held)
+  if not held then return false end
+  if not ns.weaponKind(link) or not ns.weaponKind(held) then return false end
+  local _, _, _, _, _, classID, subclassID = C_Item.GetItemInfoInstant(link)
+  local _, _, _, _, _, hClass, hSub = C_Item.GetItemInfoInstant(held)
+  if classID == nil or subclassID == nil or hClass == nil or hSub == nil then
+    return false
+  end
+  return classID ~= hClass or subclassID ~= hSub
+end
+
+function ns.announceWeaponType(link, ev)
+  local o = ns.opts()
+  if o.announce and not ns.flagged[link] then
+    ns.flagged[link] = true
+    ns.say("not equipping " .. link .. " (different weapon type, swap weapon types is off)" .. ns.why(ev))
   end
 end
 
@@ -653,6 +726,7 @@ function ns.why(ev)
   elseif ev.percent and ev.percent >= 100 then base = " (big upgrade)"
   elseif ev.percent then base = string.format(" (+%.1f%%)", ev.percent * 100) end
   if ev.completes then base = base .. " (completes " .. ev.completes .. ")" end
+  if ev.handSwap then base = base .. " (1H/2H swap)" end
   return base
 end
 
@@ -879,14 +953,20 @@ function ns.scan()
               local held = slotID and GetInventoryItemLink("player", slotID)
               local breakThreshold, breakSet = ns.setBreaks(setCtx, link, held)
               local completes = ns.setSwapCompletes(held, readyThreshold, readySet)
+              local handSwap = ns.handCrosses(link, held)
               if o.keepHeirlooms and ns.isHeirloom(held) then
                 ns.announceHeirloom(link, held)
               elseif ns.weaponKindCrosses(link, held) then
                 ns.announceWeaponKind(link, ev)
+              elseif handSwap and not o.swapWeapons then
+                ns.announceHandSwap(link, ev)
+              elseif not o.swapWeapons and ns.weaponTypeCrosses(link, held) then
+                ns.announceWeaponType(link, ev)
               elseif breakThreshold then
                 ns.announceSetBreak(link, breakSet, breakThreshold)
               elseif ev.upgrade or completes then
                 if completes then ev.completes = ns.bonusLabel(readySet, completes) end
+                if handSwap then ev.handSwap = true end
                 if ns.equip(link, ev, nil) then ns.scanning = false return end
               end
             end
@@ -953,6 +1033,8 @@ function ns.ensureSettings()
     "Keep equipped heirlooms even when something else scores higher.")
   check("protectSets", "Prioritize set bonuses",
     "Complete set bonuses automatically and never break an active one. A bonus-completing piece equips even without a Pawn verdict.")
+  check("swapWeapons", "Swap weapon types",
+    "Equip upgrades across weapon types: sword to dagger, gun to bow, one-hand plus off-hand to staff. Melee-to-ranged swaps always announce instead, and unusable weapons never equip.")
   do
     local s = Settings.RegisterAddOnSetting(
       category, "VocGear_scale", "scale",
