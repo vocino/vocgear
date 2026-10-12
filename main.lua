@@ -151,6 +151,20 @@ function ns.unusable(link)
   if not ok then return false end
   return equippable == false
 end
+-- Cosmetic gear is never an upgrade on any path: shirts and tabards
+-- carry no stats, and a fishing pole must never win a weapon slot.
+-- Pawn bails on all three itself; this keeps the built-in fallback
+-- honest and statless poles out of the unsure-retry loop. Unknown data
+-- fails open. Enum.ItemWeaponSubclass.Fishingpole = 20
+-- (ItemConstantsDocumentation, live 12.1.0).
+ns.COSMETIC_LOCS = { INVTYPE_BODY = true, INVTYPE_TABARD = true }
+ns.FISHING_SUBCLASS = 20
+function ns.cosmetic(link)
+  local _, _, _, equipLoc, _, classID, subclassID = C_Item.GetItemInfoInstant(link)
+  if equipLoc and ns.COSMETIC_LOCS[equipLoc] then return true end
+  if classID == 2 and subclassID == ns.FISHING_SUBCLASS then return true end
+  return false
+end
 
 -- Answer "is this link an upgrade?", through Pawn when it is driving and
 -- through the built-in item-level fallback otherwise.
@@ -161,6 +175,9 @@ function ns.evaluate(link)
   -- Min-level gate, both paths (what CheckLevel=true did on Pawn's old API).
   local _, _, _, _, minLevel = C_Item.GetItemInfo(link)
   if minLevel and UnitLevel("player") < minLevel then
+    return { upgrade = false }
+  end
+  if ns.cosmetic(link) then
     return { upgrade = false }
   end
   if ns.unusable(link) then
@@ -224,16 +241,18 @@ ns.ARMOR_BEST = {
   MAGE = 1, PRIEST = 1, WARLOCK = 1,
 }
 
+ns.ARMOR_NONGATED = { [0] = true, [5] = true, [6] = true } -- Generic, Cosmetic, Shield: no best type
 -- Armor-type gate for the built-in path (Pawn's own gate is unavailable).
 -- A candidate passes when it matches the class best type, or when it
 -- matches what is already worn (leveling in a lower armor type).
--- Cloaks have no proficiency gate. Unknown data reads as unsure (nil),
+-- Cloaks and shields bypass the gate (subclass 6 has no best type; the
+-- usability gate covers proficiency). Unknown data reads as unsure (nil),
 -- never as a yes: a firm answer waits for the item cache.
 function ns.armorBestBuiltin(link)
   local _, _, _, equipLoc, _, classID, subclassID = C_Item.GetItemInfoInstant(link)
   if equipLoc == "INVTYPE_CLOAK" then return true end
   if classID == nil or subclassID == nil then return nil end
-  if classID ~= 4 or subclassID == 0 or subclassID == 5 then return true end
+  if classID ~= 4 or ns.ARMOR_NONGATED[subclassID] then return true end
   local _, classKey = UnitClass("player")
   local best = classKey and ns.ARMOR_BEST[classKey]
   if best and subclassID == best then return true end
@@ -357,7 +376,7 @@ function ns.weaponKind(link)
   if equipLoc == "INVTYPE_WEAPON" or equipLoc == "INVTYPE_WEAPONMAINHAND"
       or equipLoc == "INVTYPE_WEAPONOFFHAND" or equipLoc == "INVTYPE_2HWEAPON"
       or equipLoc == "INVTYPE_SHIELD" or equipLoc == "INVTYPE_HOLDABLE" then
-    if classID == 2 and ns.RANGED_SUBCLASS[subclassID] then return "ranged" end -- belt
+    if classID == 2 and ns.RANGED_SUBCLASS[subclassID] then return "ranged" end -- belt-and-suspenders: shouldn't exist, read as ranged
     return "melee"
   end
   return nil -- not a weapon
@@ -773,7 +792,7 @@ function ns.equip(link, ev, slotID)
   -- exists on neither client, so a missing namespace is announced once
   -- instead of erroring on every scan.
   if not (type(C_Item) == "table" and type(C_Item.EquipItemByName) == "function") then
-    if not ns.flagged[link] then
+    if o.announce and not ns.flagged[link] then
       ns.flagged[link] = true
       ns.say("cannot equip on this client (C_Item.EquipItemByName is missing): " .. link)
     end
@@ -873,6 +892,7 @@ function ns.clearGuard()
   ns.recentSwap = {}
 end
 
+ns.UNSURE_RETRIES = 5 -- consecutive unsure scans before going quiet (~25s of grace for slow caches)
 -- Pawn may load after us or init late; one outstanding retry covers the race
 -- without stacking a new timer on every bag event.
 function ns.retrySoon()
@@ -887,11 +907,22 @@ end
 -- Manual trigger: forget one-shot announces so the report is complete,
 -- then run the normal scan (audit/pause/threshold rules all apply).
 function ns.checkNow()
+  ns.unsureStreak = 0 -- a manual look re-arms quieted retries
   ns.flagged = {}
   ns.scan()
 end
 
+-- Re-entrancy shell: the pass below can throw on truly unexpected input
+-- (a Blizzard API hiccup mid-scan), and a thrown pass must never wedge
+-- ns.scanning on. The flag clears either way; the error itself still
+-- surfaces (BugGrabber) so a real bug stays loud and debuggable.
 function ns.scan()
+  local ok, err = pcall(ns.scanInner)
+  ns.scanning = false
+  if not ok then error(err, 0) end
+end
+
+function ns.scanInner()
   if ns.scanning then return end
   local o = ns.opts()
   if not o.enabled then return end
@@ -976,9 +1007,15 @@ function ns.scan()
     end
   end
   ns.scanning = false
-  -- One equip per scan; the bag update re-triggers for the rest. Items Pawn
-  -- couldn't answer yet get a retry so they aren't skipped forever.
-  if unsure then ns.retrySoon() end
+  -- One equip per scan; the bag update re-triggers for the rest. Items
+  -- nobody could answer yet get a few retries for slow caches, then go
+  -- quiet until the next bag event so unresolvable links can't churn.
+  if unsure then
+    ns.unsureStreak = (ns.unsureStreak or 0) + 1
+    if ns.unsureStreak <= ns.UNSURE_RETRIES then ns.retrySoon() end
+  else
+    ns.unsureStreak = 0
+  end
 end
 
 -- Blizzard Settings panel (Settings > AddOns > VocGear). Built once, after
@@ -1006,8 +1043,8 @@ function ns.ensureSettings()
     ns.onSettingChanged(s, onChange or ns.scan)
   end
   check("enabled", "Enable auto-equip", "Equip upgrades out of combat. Pawn's verdict when Pawn is driving, item level otherwise.")
-  check("announce", "Chat announcements", "Print a line when VocGear equips, picks, or advises.")
-  check("audit", "Audit mode", "Announce only: never equip or pick, just say what would happen.")
+  check("announce", "Chat announcements", "Print a line when VocGear equips or advises.")
+  check("audit", "Audit mode", "Announce only: never equip, just say what would happen.")
   do
     local s = Settings.RegisterAddOnSetting(
       category, "VocGear_minUpgradePct", "minUpgradePct",
