@@ -1059,7 +1059,7 @@ do
       "spells", "specID", "itemID", "setID", "ctx", "threshold",
       "okIdx", "okID", "idx", "label", "otherHeld",
       "candID", "otherID", "isUnique", "okItem", "okUp", "bestFor",
-      "weaker", "best", "bestSlot", "equippable", "handSwap" }) do
+      "weaker", "best", "bestSlot", "equippable", "handSwap", "ok", "err" }) do
     check("no leaked global: " .. leaked, w.env[leaked] == nil)
   end
   check("slash global registered", w.env.SLASH_VOCGEAR1 == "/vg")
@@ -2440,6 +2440,198 @@ do -- a first weapon fills an empty hand with the option off
   clientLoaded(w)
   ns.scan()
   check("off: empty hand equips", #w.equipped == 1)
+end
+
+-- 90. Fallback equips shields: empty off-hand, over shields, over holdables.
+do -- a first shield fills an empty off-hand
+  local w = newWorld()
+  w.pawn = false
+  local shield = "|cffa335ee|Hitem:760|h[Shield 100]|h|r"
+  w.levels[shield] = 100
+  w.bags[0] = { shield }
+  w.slots[shield] = "INVTYPE_SHIELD"
+  w.classIDs[shield], w.subclassIDs[shield] = 4, 6
+  local ns = loadAddon(w)
+  ns.scan()
+  check("fallback: first shield equips", #w.equipped == 1)
+end
+do -- shield over shield still upgrades by level
+  local w = newWorld()
+  w.pawn = false
+  local worn = "|cff0070dd|Hitem:761|h[Shield 90]|h|r"
+  local cand = "|cffa335ee|Hitem:762|h[Shield 100]|h|r"
+  w.equippedSlots[17] = worn
+  w.levels[worn], w.levels[cand] = 90, 100
+  w.bags[0] = { cand }
+  w.slots[cand] = "INVTYPE_SHIELD"
+  w.classIDs[cand], w.subclassIDs[cand] = 4, 6
+  w.classIDs[worn], w.subclassIDs[worn] = 4, 6
+  local ns = loadAddon(w)
+  ns.scan()
+  check("fallback: shield over shield equips", #w.equipped == 1)
+end
+do -- shield over a holdable (different armor subclass, same slot)
+  local w = newWorld()
+  w.pawn = false
+  local frill = "|cff0070dd|Hitem:763|h[Frill 90]|h|r"
+  local cand = "|cffa335ee|Hitem:764|h[Shield 100]|h|r"
+  w.equippedSlots[17] = frill
+  w.levels[frill], w.levels[cand] = 90, 100
+  w.bags[0] = { cand }
+  w.slots[cand] = "INVTYPE_SHIELD"
+  w.classIDs[cand], w.subclassIDs[cand] = 4, 6
+  w.classIDs[frill], w.subclassIDs[frill] = 4, 0
+  local ns = loadAddon(w)
+  ns.scan()
+  check("fallback: shield over holdable equips", #w.equipped == 1)
+end
+do -- an unusable shield stays silent (usability still gates shields)
+  local w = newWorld()
+  w.pawn = false
+  local shield = "|cffa335ee|Hitem:765|h[Shield 100]|h|r"
+  w.levels[shield] = 100
+  w.bags[0] = { shield }
+  w.slots[shield] = "INVTYPE_SHIELD"
+  w.classIDs[shield], w.subclassIDs[shield] = 4, 6
+  w.notEquippable[shield] = true
+  local ns = loadAddon(w)
+  ns.scan()
+  check("fallback: unusable shield skipped", #w.equipped == 0 and #w.printed == 0)
+end
+
+-- 91. Cosmetics never count, on either source, and never schedule retries.
+do -- fallback: a high-ilvl shirt is ignored, silently
+  local w = newWorld()
+  w.pawn = false
+  local shirt = "|cffa335ee|Hitem:770|h[Shirt 100]|h|r"
+  w.levels[shirt] = 100
+  w.bags[0] = { shirt }
+  w.slots[shirt] = "INVTYPE_BODY"
+  w.classIDs[shirt], w.subclassIDs[shirt] = 4, 0
+  local ns = loadAddon(w)
+  ns.scan()
+  check("fallback: shirt ignored", #w.equipped == 0 and #w.printed == 0)
+  check("fallback: shirt schedules no retry", #w.timers == 0)
+end
+do -- fallback: a tabard is ignored too
+  local w = newWorld()
+  w.pawn = false
+  local tabard = "|cffa335ee|Hitem:771|h[Tabard 100]|h|r"
+  w.levels[tabard] = 100
+  w.bags[0] = { tabard }
+  w.slots[tabard] = "INVTYPE_TABARD"
+  w.classIDs[tabard], w.subclassIDs[tabard] = 4, 0
+  local ns = loadAddon(w)
+  ns.scan()
+  check("fallback: tabard ignored", #w.equipped == 0 and #w.printed == 0)
+end
+do -- fallback: a fishing pole never wins a weapon slot
+  local w = newWorld()
+  w.pawn = false
+  local staff = "|cff0070dd|Hitem:907|h[Staff 90]|h|r"
+  local pole = "|cffa335ee|Hitem:772|h[Pole 100]|h|r"
+  w.equippedSlots[16] = staff
+  w.levels[staff], w.levels[pole] = 90, 100
+  w.bags[0] = { pole }
+  w.slots[pole] = "INVTYPE_2HWEAPON"
+  w.classIDs[pole], w.subclassIDs[pole] = 2, 20
+  local ns = loadAddon(w)
+  ns.scan()
+  check("fallback: pole over staff refused", #w.equipped == 0 and #w.printed == 0)
+end
+do -- Pawn path: a statless pole skips the unsure loop entirely
+  local w = newWorld()
+  local pole = "|cffa335ee|Hitem:772|h[Pole]|h|r"
+  w.bags[0] = { pole }
+  w.slots[pole] = "INVTYPE_2HWEAPON"
+  w.classIDs[pole], w.subclassIDs[pole] = 2, 20
+  w.pawnNil[pole] = true -- Pawn caches nothing for statless items
+  local ns = loadAddon(w)
+  ns.scan()
+  check("Pawn: pole ignored", #w.equipped == 0 and #w.printed == 0)
+  check("Pawn: pole schedules no retry", #w.timers == 0)
+end
+do -- a real weapon still displaces a wielded pole
+  local w = newWorld()
+  local pole = "|cff0070dd|Hitem:772|h[Pole]|h|r"
+  local sword = "|cffa335ee|Hitem:905|h[Sword]|h|r"
+  w.equippedSlots[16] = pole
+  w.slots[pole], w.slots[sword] = "INVTYPE_2HWEAPON", "INVTYPE_WEAPON"
+  w.classIDs[pole], w.subclassIDs[pole] = 2, 20
+  w.classIDs[sword], w.subclassIDs[sword] = 2, 7
+  w.bags[0] = { sword }
+  w.upgradeLists[sword] = upgrade("A", 0.05)
+  local ns = loadAddon(w)
+  ns.scan()
+  check("sword over pole equips", #w.equipped == 1)
+end
+
+-- 92. The missing-equip-API notice honors the announce toggle.
+do
+  local w = newWorld()
+  local link = "|cffa335ee|Hitem:900|h[Helm]|h|r"
+  w.bags[0] = { link }
+  w.slots[link] = "INVTYPE_HEAD"
+  w.upgradeLists[link] = upgrade("A", 0.05)
+  local ns = loadAddon(w)
+  ns.opts().announce = false -- set directly: clientLoaded would scan first
+  w.env.C_Item.EquipItemByName = nil
+  ns.scan()
+  ns.scan()
+  check("announce off: missing API stays silent", #w.equipped == 0 and #w.printed == 0)
+end
+
+-- 93. A mid-scan error clears the flag and still surfaces: no wedge,
+-- no silence. The next trigger scans clean.
+do
+  local w = newWorld()
+  local bad = "|cffa335ee|Hitem:880|h[Bad]|h|r"
+  w.bags[0] = { bad }
+  w.slots[bad] = "INVTYPE_HEAD"
+  w.upgradeLists[bad] = upgrade("A", 0.05)
+  local ns = loadAddon(w)
+  local realEquip = w.env.C_Item.EquipItemByName
+  w.env.C_Item.EquipItemByName = function(item, slot)
+    if item == bad then error("equip exploded") end
+    return realEquip(item, slot)
+  end
+  local ok, err = pcall(ns.scan)
+  check("mid-scan error surfaces with its cause", ok == false
+    and tostring(err):find("equip exploded", 1) ~= nil)
+  check("mid-scan error does not wedge", ns.scanning == false)
+  w.env.C_Item.EquipItemByName = realEquip
+  ns.scan()
+  check("scan recovers after error", #w.equipped == 1 and ns.scanning == false)
+end
+
+-- 94. Unresolved items get five retries (~25s for slow caches), then go
+-- quiet until the next bag event; a clean scan re-arms.
+do
+  local w = newWorld()
+  local link = "|cffa335ee|Hitem:560|h[Helm]|h|r"
+  w.bags[0] = { link }
+  w.slots[link] = "INVTYPE_HEAD"
+  w.pawnNil[link] = true
+  local ns = loadAddon(w)
+  local function fire()
+    local fn = table.remove(w.timers, 1)
+    if fn then fn() end
+  end
+  ns.scan() -- streak 1: retry scheduled
+  check("first unsure schedules", #w.timers == 1)
+  fire() -- streak 2
+  check("second unsure schedules", #w.timers == 1)
+  fire() -- streak 3
+  fire() -- streak 4
+  fire() -- streak 5: last retry scheduled
+  check("fifth unsure schedules", #w.timers == 1)
+  fire() -- streak 6: give up, no timer
+  check("sixth unsure goes quiet", #w.timers == 0)
+  w.bags[0] = {} -- the item leaves; a clean scan re-arms
+  ns.scan()
+  w.bags[0] = { link }
+  ns.scan()
+  check("clean scan re-arms retries", #w.timers == 1)
 end
 
 print("tests/run.lua: " .. passed .. " checks passed")
