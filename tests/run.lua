@@ -531,7 +531,7 @@ do
   w.classIDs[link], w.subclassIDs[link] = 4, 4
   local ns = loadAddon(w)
   check("pawnReady false without Pawn", ns.pawnReady() == false)
-  check("fallback drives", ns.pawnActive() == false and ns.sourceLabel() == "item level")
+  check("fallback drives", ns.pawnReady() == false and ns.sourceLabel() == "item level")
   ns.scan()
   check("empty slot equips in fallback", #w.equipped == 1)
 end
@@ -1520,7 +1520,7 @@ do
   w.classIDs[held], w.subclassIDs[held] = 4, 4
   local ns = loadAddon(w)
   check("fallback source label", ns.sourceLabel() == "item level")
-  check("not pawn-active without Pawn", ns.pawnActive() == false)
+  check("not pawn-active without Pawn", ns.pawnReady() == false)
   ns.scan()
   check("fallback equips higher ilvl", #w.equipped == 1 and w.equipped[1].item == cand)
   check("fallback why names item level", w.printed[1]:find("item level %+10", 1) ~= nil)
@@ -1633,7 +1633,7 @@ do
   w.loadedAddons = { Pawn = true }
   w.upgradeLists[cand] = { { ScaleName = "A", PercentUpgrade = 0.05 } }
   w.frame.onEvent(nil, "ADDON_LOADED", "Pawn")
-  check("Pawn takes over after load", ns.pawnActive() == true)
+  check("Pawn takes over after load", ns.pawnReady() == true)
   check("Pawn verdict equips", #w.equipped == 1)
   check("Pawn percent printed", w.printed[1]:find("%+5%.0%%%)", 1) ~= nil)
 end

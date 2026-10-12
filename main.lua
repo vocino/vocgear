@@ -105,13 +105,6 @@ function ns.pawnReady()
     and type(_G.PawnIsItemAnItemLevelUpgrade) == "function"
 end
 
--- Pawn is the upgrade source when its API is present. Pawn itself filters
--- by visible scales; a loaded Pawn with no scales simply finds nothing,
--- and the item-level toggle still applies. When Pawn is absent entirely,
--- the built-in fallback drives.
-function ns.pawnActive()
-  return ns.pawnReady()
-end
 
 -- Pawn installed and loadable but not loaded yet: its ADDON_LOADED will
 -- trigger a rescan, so wait instead of falling back for a single pass and
@@ -134,7 +127,7 @@ end
 -- Which system is deciding upgrades right now. Shown in settings and in
 -- announcements so the player always knows what is driving.
 function ns.sourceLabel()
-  if ns.pawnActive() then return "Pawn" end
+  if ns.pawnReady() then return "Pawn" end
   return "item level"
 end
 
@@ -183,7 +176,7 @@ function ns.evaluate(link)
   if ns.unusable(link) then
     return { upgrade = false }
   end
-  if ns.pawnActive() then
+  if ns.pawnReady() then
     return ns.evaluatePawn(link)
   end
   return ns.evaluateBuiltin(link)
@@ -1096,7 +1089,7 @@ function ns.ensureSettings()
 end
 
 function ns.sourceNoteText()
-  if ns.pawnActive() then return "Upgrade source: Pawn (your stat weights)" end
+  if ns.pawnReady() then return "Upgrade source: Pawn (your stat weights)" end
   return "Upgrade source: built-in item level (install Pawn for stat weights)"
 end
 
