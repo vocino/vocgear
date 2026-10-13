@@ -2658,7 +2658,8 @@ do
   check("one item link enumerated", links and #links == 1 and links[1] == helm)
 end
 
--- 99. Vault recommend ranks tier completion above a higher Pawn score.
+-- 99. Vault recommend ranks tier completion above a higher Pawn score,
+-- and 4pc completion above 2pc.
 do
   local w = newWorld()
   specReady(w)
@@ -2680,8 +2681,57 @@ do
   local ns = loadAddon(w)
   local recs = ns.vaultRecommend()
   check("two picks ranked", recs and #recs == 2)
-  check("tier completion outranks score", recs[1].link == tierReward and recs[1].tierThresh == 2)
+  check("2pc completion outranks score", recs[1].link == tierReward and recs[1].tierProgress == 3)
   check("runner-up keeps its score", recs[2].link == pawnReward)
+end
+
+-- 99b. Toward-4pc outranks starting a set; starting outranks raw score.
+do
+  local w = newWorld()
+  specReady(w)
+  local setA, setB = 7010, 7020
+  local wornA1, wornA2 = tierPiece(w, setA), tierPiece(w, setA)
+  w.equippedSlots[1], w.equippedSlots[3] = wornA1, wornA2
+  w.slots[wornA1], w.slots[wornA2] = "INVTYPE_HEAD", "INVTYPE_SHOULDER"
+  local toward4 = tierPiece(w, setA) -- 2 -> 3
+  local starter = tierPiece(w, setB) -- 0 -> 1
+  local plain = "|cffa335ee|Hitem:90007|h[Vault Plain]|h|r"
+  w.slots[toward4], w.slots[starter], w.slots[plain] = "INVTYPE_CHEST", "INVTYPE_LEGS", "INVTYPE_FEET"
+  w.vaultActivities = { { rewards = {
+    { type = 1, itemDBID = 601 }, { type = 1, itemDBID = 602 }, { type = 1, itemDBID = 603 } } } }
+  w.vaultLinks[601], w.vaultLinks[602], w.vaultLinks[603] = toward4, starter, plain
+  w.upgradeLists[toward4] = upgrade("A", 0.01)
+  w.upgradeLists[starter] = upgrade("A", 0.01)
+  w.upgradeLists[plain] = upgrade("A", 0.30)
+  local ns = loadAddon(w)
+  local recs = ns.vaultRecommend()
+  check("toward-4pc first", recs[1].link == toward4 and recs[1].tierProgress == 2)
+  check("starter second", recs[2].link == starter and recs[2].tierProgress == 1)
+  check("raw score last", recs[3].link == plain and recs[3].tierProgress == 0)
+  check("verdict names the progress", ns.vaultVerdict(recs[1]):find("toward", 1, true) ~= nil)
+end
+
+-- 99c. A fifth piece of a completed set gets no tier priority.
+do
+  local w = newWorld()
+  specReady(w)
+  local setID = 7030
+  for i, slot in ipairs({ 1, 3, 5, 7 }) do
+    local p = tierPiece(w, setID)
+    w.equippedSlots[slot] = p
+    w.slots[p] = "INVTYPE_HEAD"
+  end
+  local fifth = tierPiece(w, setID)
+  local plain = "|cffa335ee|Hitem:90008|h[Vault Plain2]|h|r"
+  w.slots[fifth], w.slots[plain] = "INVTYPE_WRIST", "INVTYPE_WRIST"
+  w.vaultActivities = { { rewards = { { type = 1, itemDBID = 701 }, { type = 1, itemDBID = 702 } } } }
+  w.vaultLinks[701], w.vaultLinks[702] = fifth, plain
+  w.upgradeLists[fifth] = upgrade("A", 0.02)
+  w.upgradeLists[plain] = upgrade("A", 0.09)
+  local ns = loadAddon(w)
+  local recs = ns.vaultRecommend()
+  check("completed set scores normally", recs[1].link == plain)
+  check("fifth piece no priority", recs[2].tierProgress == 0)
 end
 
 -- 100. Vault recommend falls back to Pawn percent with no tier in play.
