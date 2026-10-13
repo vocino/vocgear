@@ -28,9 +28,10 @@ the check on demand. Changing any option rescans too. The addon
 compartment on the minimap opens the settings.
 
 On vault day, `/vg vault` scores your Great Vault rewards and
-recommends the pick: a piece that completes a set bonus wins, then the
-best Pawn (or item-level) upgrade. The same recommendation prints
-automatically when claimable rewards appear.
+recommends the pick: tier progress wins -- completing 4pc beats
+completing 2pc, which beats moving toward a bonus, which beats starting
+a set -- then the best Pawn (or item-level) upgrade. The same
+recommendation prints automatically when claimable rewards appear.
 
 ```
 /vg            toggle auto-equip on/off

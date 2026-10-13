@@ -652,9 +652,50 @@ function ns.vaultLinks()
   return links
 end
 
--- Ranked vault picks: tier completion first (higher threshold first),
--- then Pawn percent, then item level. Each entry: {link, ev, tierThresh,
--- tierSet}. ev may be nil (unscored) — those sink below scored picks.
+-- Tier progress value for a candidate piece: how much closer it moves
+-- the player to the next set bonus. Matches the player mental model:
+-- any step toward a bonus counts, and completing 4pc is the jackpot.
+-- The equip path keeps its completion-only rule; this coarser ranking
+-- is the vault's "take the tier" logic.
+--   4: completes 4pc      3: completes 2pc
+--   2: 2 -> 3, toward 4pc  1: 0 -> 1, starts the set
+--   0: no tier value (bonus held, set declined, no bonus set)
+function ns.tierProgress(ctx, link)
+  if not ctx then return 0 end
+  local candSet = ns.setID(link)
+  if not candSet or ns.setDeclined[candSet] then return 0 end
+  if not ns.setHasBonuses(link, ctx.specID) then return 0 end
+  -- Level gate, same as evaluate's: above-level pieces add nothing.
+  local okLvl, _, _, _, _, minLevel = pcall(C_Item.GetItemInfo, link)
+  if okLvl and minLevel and UnitLevel("player") < minLevel then return 0 end
+  local n = ctx.counts[candSet] or 0
+  for _, t in ipairs(ns.SET_THRESHOLDS) do
+    if n + 1 == t then return t == 4 and 4 or 3 end
+  end
+  if n == 2 then return 2 end
+  if n == 0 then return 1 end
+  return 0
+end
+
+-- "completes Testplate 4pc", "toward Testplate 4pc", "starts Testplate".
+function ns.progressLabel(setID, progress)
+  if progress == 4 or progress == 3 then
+    return "completes " .. ns.bonusLabel(setID, progress == 4 and 4 or 2)
+  end
+  local label = setID and ns.setName(setID) or nil
+  if progress == 2 then
+    return "toward " .. (label and label .. " 4pc" or "4pc")
+  end
+  if progress == 1 then
+    return "starts " .. (label or "the set")
+  end
+  return nil
+end
+
+-- Ranked vault picks: tier progress first (4pc completion outranks 2pc,
+-- which outranks moving toward a bonus), then Pawn percent, then item
+-- level. Each entry: {link, ev, tierProgress, tierSet}. ev may be nil
+-- (unscored); those sink below scored picks.
 function ns.vaultRecommend()
   local links = ns.vaultLinks()
   if not links then return nil end
@@ -662,12 +703,12 @@ function ns.vaultRecommend()
   local scored = {}
   for _, link in ipairs(links) do
     local ev = ns.evaluate(link)
-    local thresh, setID = ns.setCompletionReady(ctx, link)
-    table.insert(scored, { link = link, ev = ev, tierThresh = thresh, tierSet = setID })
+    local progress = ns.tierProgress(ctx, link)
+    table.insert(scored, { link = link, ev = ev, tierProgress = progress,
+      tierSet = ns.setID(link) })
   end
   table.sort(scored, function(a, b)
-    local at, bt = a.tierThresh or 0, b.tierThresh or 0
-    if at ~= bt then return at > bt end
+    if a.tierProgress ~= b.tierProgress then return a.tierProgress > b.tierProgress end
     local ap = a.ev and a.ev.percent or -1
     local bp = b.ev and b.ev.percent or -1
     if ap ~= bp then return ap > bp end
@@ -680,8 +721,8 @@ end
 
 -- One-line verdict for a ranked pick, for the non-top rows.
 function ns.vaultVerdict(pick)
-  if pick.tierThresh then
-    return "completes " .. ns.bonusLabel(pick.tierSet, pick.tierThresh)
+  if pick.tierProgress > 0 then
+    return ns.progressLabel(pick.tierSet, pick.tierProgress)
   end
   local ev = pick.ev
   if ev and ev.upgrade and ev.percent then
