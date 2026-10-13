@@ -25,8 +25,10 @@ globals = {
 read_globals = {
   "_G",
   "C_AddOns", "C_Container", "C_Item", "C_SpecializationInfo", "C_Timer",
+  "C_WeeklyRewards",
   "CreateFrame", "GameTooltip", "GetInventoryItemLink",
   "GetTime", "InCombatLockdown", "NUM_BAG_SLOTS", "PaperDollFrame",
+  "Enum",
   "PlaySound", "SOUNDKIT", -- presence-gated; ns.play falls back to numeric IDs
   "Settings", "MinimalSliderWithSteppersMixin", "UnitClass", "UnitLevel",
   "CreateSettingsListSectionHeaderInitializer", "SettingsPanel",

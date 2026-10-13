@@ -614,6 +614,121 @@ function ns.announceSetBreak(link, breakSet, threshold)
   end
 end
 
+-- Great Vault pick recommendation (C_WeeklyRewards, live 12.1.5).
+-- Enumerates unclaimed vault rewards, scores each through ns.evaluate,
+-- and recommends the best pick. Tier-set completion outranks raw score:
+-- completing a 2pc/4pc is the goal most weeks. Pawn itself only annotates
+-- vault tooltips; it never recommends a pick, so this fills the gap.
+-- Rewards materialize on first vault interaction after reset; claiming
+-- stays manual (Blizzard requires the player at the vault).
+
+-- All unclaimed vault reward links, or nil when the API is absent or
+-- nothing is available. Presence-gated throughout: no C_WeeklyRewards,
+-- no vault logic, never an error.
+function ns.vaultLinks()
+  if type(C_WeeklyRewards) ~= "table" then return nil end
+  if type(C_WeeklyRewards.GetActivities) ~= "function" then return nil end
+  if type(C_WeeklyRewards.GetItemHyperlink) ~= "function" then return nil end
+  local okActs, activities = pcall(C_WeeklyRewards.GetActivities)
+  if not okActs or type(activities) ~= "table" then return nil end
+  local itemType = type(Enum) == "table" and Enum.CachedRewardType
+    and Enum.CachedRewardType.Item or nil
+  local links, seen = {}, {}
+  for _, activity in ipairs(activities) do
+    if type(activity) == "table" and type(activity.rewards) == "table" then
+      for _, reward in ipairs(activity.rewards) do
+        if type(reward) == "table" and reward.itemDBID
+          and (itemType == nil or reward.type == itemType) then
+          local okLink, link = pcall(C_WeeklyRewards.GetItemHyperlink, reward.itemDBID)
+          if okLink and type(link) == "string" and not seen[link] then
+            seen[link] = true
+            table.insert(links, link)
+          end
+        end
+      end
+    end
+  end
+  if #links == 0 then return nil end
+  return links
+end
+
+-- Ranked vault picks: tier completion first (higher threshold first),
+-- then Pawn percent, then item level. Each entry: {link, ev, tierThresh,
+-- tierSet}. ev may be nil (unscored) — those sink below scored picks.
+function ns.vaultRecommend()
+  local links = ns.vaultLinks()
+  if not links then return nil end
+  local ctx = ns.setContext()
+  local scored = {}
+  for _, link in ipairs(links) do
+    local ev = ns.evaluate(link)
+    local thresh, setID = ns.setCompletionReady(ctx, link)
+    table.insert(scored, { link = link, ev = ev, tierThresh = thresh, tierSet = setID })
+  end
+  table.sort(scored, function(a, b)
+    local at, bt = a.tierThresh or 0, b.tierThresh or 0
+    if at ~= bt then return at > bt end
+    local ap = a.ev and a.ev.percent or -1
+    local bp = b.ev and b.ev.percent or -1
+    if ap ~= bp then return ap > bp end
+    local ai = a.ev and a.ev.itemLevel or 0
+    local bi = b.ev and b.ev.itemLevel or 0
+    return ai > bi
+  end)
+  return scored
+end
+
+-- One-line verdict for a ranked pick, for the non-top rows.
+function ns.vaultVerdict(pick)
+  if pick.tierThresh then
+    return "completes " .. ns.bonusLabel(pick.tierSet, pick.tierThresh)
+  end
+  local ev = pick.ev
+  if ev and ev.upgrade and ev.percent then
+    return string.format("+%.1f%% %s", ev.percent * 100, ns.sourceLabel())
+  end
+  if ev and ev.upgrade then
+    return "upgrade (" .. ns.sourceLabel() .. ")"
+  end
+  if ev then
+    return "not an upgrade"
+  end
+  return "unscored"
+end
+
+-- Print the vault recommendation. Top pick first with its reason, then
+-- the rest briefly. Always available on demand; the event path calls it
+-- once per claimable set (see maybeVaultRecommend).
+function ns.vaultSay()
+  local recs = ns.vaultRecommend()
+  if not recs then
+    ns.say("no vault rewards to score (open the Great Vault first)")
+    return
+  end
+  local top = recs[1]
+  ns.say("vault pick: " .. top.link .. " (" .. ns.vaultVerdict(top) .. ")")
+  for i = 2, #recs do
+    print("  " .. recs[i].link .. " (" .. ns.vaultVerdict(recs[i]) .. ")")
+  end
+end
+
+-- Auto-recommend once per claimable reward set. Fires on
+-- WEEKLY_REWARDS_UPDATE; the flag resets when nothing is claimable so
+-- next week's set recommends again. Gated by the announce setting like
+-- every other chat output.
+function ns.maybeVaultRecommend()
+  if type(C_WeeklyRewards) ~= "table" then return end
+  if type(C_WeeklyRewards.CanClaimRewards) ~= "function" then return end
+  local ok, claimable = pcall(C_WeeklyRewards.CanClaimRewards)
+  if not ok or not claimable then
+    ns.vaultRecommended = false
+    return
+  end
+  if ns.vaultRecommended then return end
+  ns.vaultRecommended = true
+  if ns.opts().announce then ns.vaultSay() end
+end
+
 -- Pawn's best ring for a scale, via its own best-item lookup
 -- (PawnGetBestItemLink, Pawn.lua:5910): the link behind the "your best"
 -- tooltip line. DoNotRescan keeps VocGear from triggering Pawn's
@@ -1221,8 +1336,12 @@ ns.frame:RegisterEvent("ADDON_LOADED")
 ns.frame:RegisterEvent("BAG_UPDATE_DELAYED")
 ns.frame:RegisterEvent("PLAYER_ENTERING_WORLD")
 ns.frame:RegisterEvent("PLAYER_REGEN_ENABLED")
+ns.frame:RegisterEvent("WEEKLY_REWARDS_UPDATE")
 ns.frame:SetScript("OnEvent", function(_, event, arg1)
-  if event == "ADDON_LOADED" then
+  if event == "WEEKLY_REWARDS_UPDATE" then
+    ns.maybeVaultRecommend()
+    return
+  end  if event == "ADDON_LOADED" then
     -- The client replaces the SavedVariables global with the loaded table
     -- after our file ran, so rebind or settings never persist.
     if arg1 == name then
@@ -1251,6 +1370,7 @@ ns.HELP = {
   "/vg            toggle auto-equip on/off",
   "/vg on|off     set auto-equip explicitly",
   "/vg scan       check bags now",
+  "/vg vault      recommend a Great Vault pick",
   "/vg announce   toggle chat announcements",
   "/vg config     open Settings > AddOns > VocGear",
   "/vg help       this list (/vocgear works too)",
@@ -1290,6 +1410,8 @@ SlashCmdList.VOCGEAR = function(msg)
     ns.openConfig()
   elseif msg == "scan" then
     ns.checkNow()
+  elseif msg == "vault" then
+    ns.vaultSay()
   else
     ns.help()
   end
