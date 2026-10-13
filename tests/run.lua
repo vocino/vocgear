@@ -100,6 +100,12 @@ local function loadAddon(world)
   g.C_Timer = {
     After = function(_, fn) world.timers[#world.timers + 1] = fn end,
   }
+  g.Enum = { CachedRewardType = { Item = 1, Currency = 2 } }
+  g.C_WeeklyRewards = {
+    GetActivities = function() return world.vaultActivities end,
+    GetItemHyperlink = function(itemDBID) return world.vaultLinks[itemDBID] end,
+    CanClaimRewards = function() return world.vaultClaimable end,
+  }
   g.SlashCmdList = {}
   g.CreateFrame = function(ftype, _, _, template)
     local f = { events = {}, scripts = {}, ctype = ftype, template = template }
@@ -237,7 +243,8 @@ local function newWorld()
            frames = {}, gametip = { lines = {} }, withPaperDoll = false,
            hooks = {}, pawnBtn = nil, playerClass = nil,
            loadedAddons = nil, installedAddons = nil, headerNotes = {},
-           playedSounds = {} }
+           playedSounds = {}, vaultActivities = {}, vaultClaimable = false,
+           vaultLinks = {} }
 end
 
 -- Simulate the client deserializing SavedVariables (a FRESH table replaces
@@ -2632,6 +2639,110 @@ do
   w.bags[0] = { link }
   ns.scan()
   check("clean scan re-arms retries", #w.timers == 1)
+end
+
+-- 98. Vault links enumerate item rewards, skip currency.
+do
+  local w = newWorld()
+  local helm = "|cffa335ee|Hitem:90001|h[Vault Helm]|h|r"
+  w.vaultActivities = {
+    { rewards = {
+      { type = 1, itemDBID = 101 },
+      { type = 2, itemDBID = 102 },
+      { type = 1, itemDBID = nil },
+    } },
+  }
+  w.vaultLinks[101] = helm
+  local ns = loadAddon(w)
+  local links = ns.vaultLinks()
+  check("one item link enumerated", links and #links == 1 and links[1] == helm)
+end
+
+-- 99. Vault recommend ranks tier completion above a higher Pawn score.
+do
+  local w = newWorld()
+  specReady(w)
+  local setID = 7001
+  local worn = tierPiece(w, setID)
+  w.equippedSlots[1] = worn
+  w.slots[worn] = "INVTYPE_HEAD"
+  local tierReward = tierPiece(w, setID)
+  w.slots[tierReward] = "INVTYPE_SHOULDER"
+  local pawnReward = "|cffa335ee|Hitem:90002|h[Vault Chest]|h|r"
+  w.slots[pawnReward] = "INVTYPE_CHEST"
+  w.vaultActivities = {
+    { rewards = { { type = 1, itemDBID = 201 }, { type = 1, itemDBID = 202 } } },
+  }
+  w.vaultLinks[201] = tierReward
+  w.vaultLinks[202] = pawnReward
+  w.upgradeLists[tierReward] = upgrade("A", 0.02)
+  w.upgradeLists[pawnReward] = upgrade("A", 0.20)
+  local ns = loadAddon(w)
+  local recs = ns.vaultRecommend()
+  check("two picks ranked", recs and #recs == 2)
+  check("tier completion outranks score", recs[1].link == tierReward and recs[1].tierThresh == 2)
+  check("runner-up keeps its score", recs[2].link == pawnReward)
+end
+
+-- 100. Vault recommend falls back to Pawn percent with no tier in play.
+do
+  local w = newWorld()
+  specReady(w)
+  local a = "|cffa335ee|Hitem:90003|h[Vault A]|h|r"
+  local b = "|cffa335ee|Hitem:90004|h[Vault B]|h|r"
+  w.slots[a], w.slots[b] = "INVTYPE_HEAD", "INVTYPE_HEAD"
+  w.vaultActivities = { { rewards = { { type = 1, itemDBID = 301 }, { type = 1, itemDBID = 302 } } } }
+  w.vaultLinks[301], w.vaultLinks[302] = a, b
+  w.upgradeLists[a] = upgrade("A", 0.03)
+  w.upgradeLists[b] = upgrade("A", 0.11)
+  local ns = loadAddon(w)
+  local recs = ns.vaultRecommend()
+  check("higher percent wins", recs and recs[1].link == b)
+end
+
+-- 101. /vg vault prints the top pick with its reason.
+do
+  local w = newWorld()
+  specReady(w)
+  local a = "|cffa335ee|Hitem:90005|h[Vault Pick]|h|r"
+  w.slots[a] = "INVTYPE_HEAD"
+  w.vaultActivities = { { rewards = { { type = 1, itemDBID = 401 } } } }
+  w.vaultLinks[401] = a
+  w.upgradeLists[a] = upgrade("A", 0.07)
+  local ns = loadAddon(w)
+  ns.vaultSay()
+  check("vault pick announced", #w.printed == 1 and w.printed[1]:find("vault pick:", 1, true) ~= nil)
+  check("percent in reason", w.printed[1]:find("+7.0%", 1, true) ~= nil)
+end
+
+-- 102. Auto-recommend fires once per claimable set.
+do
+  local w = newWorld()
+  local a = "|cffa335ee|Hitem:90006|h[Vault Auto]|h|r"
+  w.slots[a] = "INVTYPE_HEAD"
+  w.vaultActivities = { { rewards = { { type = 1, itemDBID = 501 } } } }
+  w.vaultLinks[501] = a
+  w.upgradeLists[a] = upgrade("A", 0.05)
+  w.vaultClaimable = true
+  local ns = loadAddon(w)
+  ns.maybeVaultRecommend()
+  ns.maybeVaultRecommend()
+  check("one announcement per set", #w.printed == 1)
+  w.vaultClaimable = false
+  ns.maybeVaultRecommend()
+  w.vaultClaimable = true
+  ns.maybeVaultRecommend()
+  check("re-arms after claim", #w.printed == 2)
+end
+
+-- 103. No C_WeeklyRewards: vault commands degrade quietly.
+do
+  local w = newWorld()
+  local ns = loadAddon(w)
+  w.env.C_WeeklyRewards = nil
+  check("vaultLinks nil without API", ns.vaultLinks() == nil)
+  ns.vaultSay()
+  check("vaultSay explains", #w.printed == 1 and w.printed[1]:find("no vault rewards", 1, true) ~= nil)
 end
 
 print("tests/run.lua: " .. passed .. " checks passed")
