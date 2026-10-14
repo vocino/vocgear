@@ -149,7 +149,7 @@ end
 -- Pawn bails on all three itself; this keeps the built-in fallback
 -- honest and statless poles out of the unsure-retry loop. Unknown data
 -- fails open. Enum.ItemWeaponSubclass.Fishingpole = 20
--- (ItemConstantsDocumentation, live 12.1.0).
+-- (ItemConstantsDocumentation, live 12.1.5).
 ns.COSMETIC_LOCS = { INVTYPE_BODY = true, INVTYPE_TABARD = true }
 ns.FISHING_SUBCLASS = 20
 function ns.cosmetic(link)
@@ -226,7 +226,7 @@ function ns.evaluatePawn(link)
 end
 
 -- Class best armor, Enum.ItemArmorSubclass (ItemConstantsDocumentation,
--- live 12.1.0): Cloth 1, Leather 2, Mail 3, Plate 4.
+-- live 12.1.5): Cloth 1, Leather 2, Mail 3, Plate 4.
 ns.ARMOR_BEST = {
   WARRIOR = 4, PALADIN = 4, DEATHKNIGHT = 4,
   HUNTER = 3, SHAMAN = 3, EVOKER = 3,
@@ -356,7 +356,7 @@ end
 -- disable a whole action bar (BM hunter + sword), so VocGear
 -- announces those swaps and leaves them to the player, both ways.
 -- Unknown kinds fail open: an undetectable weapon still equips.
--- Enum.ItemWeaponSubclass (ItemConstantsDocumentation, live 12.1.0).
+-- Enum.ItemWeaponSubclass (ItemConstantsDocumentation, live 12.1.5).
 ns.RANGED_SUBCLASS = { [2] = true, [3] = true, [18] = true } -- Bows, Guns, Crossbow
 ns.WAND_SUBCLASS = 19 -- Enum.ItemWeaponSubclass.Wand, same source
 function ns.weaponKind(link)
