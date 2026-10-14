@@ -1,4 +1,4 @@
-## Interface: 120100
+## Interface: 120105
 ## Title: VocGear
 ## Notes: Equip bag upgrades out of combat, with or without Pawn. (/vg)
 ## Author: vocino
