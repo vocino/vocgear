@@ -445,6 +445,32 @@ function ns.announceWeaponType(link, ev)
   end
 end
 
+-- Off-hand pairing gate. Equipping an off-hand (shield, holdable, or
+-- off-hand weapon) while a two-hand weapon fills the main hand makes the
+-- client drop the two-hander and leaves the main hand empty: a staff for
+-- a frill, with nothing to pair it with. So an off-hand only equips when
+-- the main hand is empty, holds a one-hander, or holds a wand (which
+-- pairs like a one-hander, same as Pawn); over a two-hand or ranged main
+-- hand it is announced instead. Unknown main hands fail open, like every
+-- other weapon gate (equipped items are always cached, so this is moot).
+ns.OFFHAND_LOCS = { INVTYPE_SHIELD = true, INVTYPE_WEAPONOFFHAND = true, INVTYPE_HOLDABLE = true }
+function ns.offhandStrands(link)
+  local _, _, _, equipLoc = C_Item.GetItemInfoInstant(link)
+  if not equipLoc or not ns.OFFHAND_LOCS[equipLoc] then return false end
+  local mh = GetInventoryItemLink("player", 16)
+  if not mh then return false end
+  if ns.handedness(mh) == "2H" then return true end
+  return ns.weaponKind(mh) == "ranged"
+end
+
+function ns.announceOffhand(link, ev)
+  local o = ns.opts()
+  if o.announce and not ns.flagged[link] then
+    ns.flagged[link] = true
+    ns.say("not equipping " .. link .. " (off-hand needs a one-hand main hand)" .. ns.why(ev))
+  end
+end
+
 -- Set bonus handling. Pawn scores pure stats and never values 2pc/4pc
 -- bonuses (verified: no set handling in Pawn 2.13.16), so an unguided
 -- equip can silently break an active bonus while a bonus-completing tier
@@ -1138,6 +1164,8 @@ function ns.scanInner()
                 ns.announceHeirloom(link, held)
               elseif ns.weaponKindCrosses(link, held) then
                 ns.announceWeaponKind(link, ev)
+              elseif ns.offhandStrands(link) then
+                ns.announceOffhand(link, ev)
               elseif handSwap and not o.swapWeapons then
                 ns.announceHandSwap(link, ev)
               elseif not o.swapWeapons and ns.weaponTypeCrosses(link, held) then

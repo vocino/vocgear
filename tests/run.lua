@@ -2795,4 +2795,119 @@ do
   check("vaultSay explains", #w.printed == 1 and w.printed[1]:find("no vault rewards", 1, true) ~= nil)
 end
 
+-- 104. Off-hand over a two-hand main hand: announced, never equipped.
+do -- the warlock case: staff worn, frill in bags, no main hand to pair
+  local w = newWorld()
+  local staff = "|cff0070dd|Hitem:907|h[Staff A]|h|r"
+  local frill = "|cffa335ee|Hitem:920|h[Frill]|h|r"
+  w.equippedSlots[16] = staff
+  w.slots[staff], w.slots[frill] = "INVTYPE_2HWEAPON", "INVTYPE_HOLDABLE"
+  w.bags[0] = { frill }
+  w.upgradeLists[frill] = upgrade("A", 0.05)
+  local ns = loadAddon(w)
+  check("staff main hand strands", ns.offhandStrands(frill) == true)
+  ns.scan()
+  ns.scan()
+  check("frill over staff not equipped", #w.equipped == 0)
+  check("frill over staff announced once", #w.printed == 1)
+  check("off-hand wording", w.printed[1]:find("one%-hand main hand", 1) ~= nil)
+end
+do -- bow main hand strands too (ranged two-handers block the off-hand)
+  local w = newWorld()
+  local bow = "|cff0070dd|Hitem:903|h[Bow A]|h|r"
+  local frill = "|cffa335ee|Hitem:921|h[Frill]|h|r"
+  w.equippedSlots[16] = bow
+  w.slots[bow], w.slots[frill] = "INVTYPE_RANGED", "INVTYPE_HOLDABLE"
+  w.bags[0] = { frill }
+  w.upgradeLists[frill] = upgrade("A", 0.05)
+  local ns = loadAddon(w)
+  ns.scan()
+  check("frill over bow not equipped", #w.equipped == 0 and #w.printed == 1)
+end
+do -- one-hand main hand: the normal off-hand upgrade still equips
+  local w = newWorld()
+  local sword = "|cff0070dd|Hitem:905|h[Sword A]|h|r"
+  local frill = "|cffa335ee|Hitem:922|h[Frill]|h|r"
+  w.equippedSlots[16] = sword
+  w.slots[sword], w.slots[frill] = "INVTYPE_WEAPON", "INVTYPE_HOLDABLE"
+  w.bags[0] = { frill }
+  w.upgradeLists[frill] = upgrade("A", 0.05)
+  local ns = loadAddon(w)
+  check("one-hand main hand pairs", ns.offhandStrands(frill) == false)
+  ns.scan()
+  check("frill over sword equips", #w.equipped == 1)
+end
+do -- wand main hand pairs like a one-hander
+  local w = newWorld()
+  local wand = "|cff0070dd|Hitem:908|h[Wand]|h|r"
+  local frill = "|cffa335ee|Hitem:923|h[Frill]|h|r"
+  w.equippedSlots[16] = wand
+  w.slots[wand], w.slots[frill] = "INVTYPE_RANGED", "INVTYPE_HOLDABLE"
+  w.classIDs[wand], w.subclassIDs[wand] = 2, 19
+  w.bags[0] = { frill }
+  w.upgradeLists[frill] = upgrade("A", 0.05)
+  local ns = loadAddon(w)
+  ns.scan()
+  check("frill over wand equips", #w.equipped == 1)
+end
+do -- empty main hand still fills (nothing to unequip)
+  local w = newWorld()
+  local frill = "|cffa335ee|Hitem:924|h[Frill]|h|r"
+  w.slots[frill] = "INVTYPE_HOLDABLE"
+  w.bags[0] = { frill }
+  w.upgradeLists[frill] = upgrade("A", 0.05)
+  local ns = loadAddon(w)
+  ns.scan()
+  check("frill into empty hands equips", #w.equipped == 1)
+end
+do -- non-off-hand candidates never trip the gate
+  local w = newWorld()
+  local staff = "|cff0070dd|Hitem:907|h[Staff A]|h|r"
+  local sword = "|cffa335ee|Hitem:905|h[Sword]|h|r"
+  w.equippedSlots[16] = staff
+  w.slots[staff], w.slots[sword] = "INVTYPE_2HWEAPON", "INVTYPE_WEAPON"
+  w.classIDs[staff], w.subclassIDs[staff] = 2, 10
+  w.classIDs[sword], w.subclassIDs[sword] = 2, 7
+  local ns = loadAddon(w)
+  check("main-hand candidate exempt", ns.offhandStrands(sword) == false)
+end
+
+-- 105. A paired main hand in bags equips first; the off-hand follows.
+do
+  local w = newWorld()
+  local staff = "|cff0070dd|Hitem:907|h[Staff A]|h|r"
+  local sword = "|cffa335ee|Hitem:905|h[Sword]|h|r"
+  local frill = "|cffa335ee|Hitem:925|h[Frill]|h|r"
+  w.equippedSlots[16] = staff
+  w.slots[staff], w.slots[sword], w.slots[frill] =
+    "INVTYPE_2HWEAPON", "INVTYPE_WEAPON", "INVTYPE_HOLDABLE"
+  w.classIDs[staff], w.subclassIDs[staff] = 2, 10
+  w.classIDs[sword], w.subclassIDs[sword] = 2, 7
+  w.bags[0] = { frill, sword } -- off-hand scanned first, still waits
+  w.upgradeLists[frill] = upgrade("A", 0.05)
+  w.upgradeLists[sword] = upgrade("A", 0.06)
+  local ns = loadAddon(w)
+  ns.scan()
+  check("main hand equips first", #w.equipped == 1 and w.equipped[1].item == sword)
+  ns.scan()
+  check("off-hand follows", #w.equipped == 2 and w.equipped[2].item == frill)
+  check("main hand never emptied", w.equippedSlots[16] == sword and w.equippedSlots[17] == frill)
+end
+do -- built-in fallback: empty off-hand slot is no license to drop a staff
+  local w = newWorld()
+  w.pawn = false
+  local staff = "|cff0070dd|Hitem:907|h[Staff 90]|h|r"
+  local frill = "|cffa335ee|Hitem:926|h[Frill 100]|h|r"
+  w.equippedSlots[16] = staff
+  w.levels[staff], w.levels[frill] = 90, 100
+  w.bags[0] = { frill }
+  w.slots[staff], w.slots[frill] = "INVTYPE_2HWEAPON", "INVTYPE_HOLDABLE"
+  w.classIDs[frill], w.subclassIDs[frill] = 4, 0
+  local ns = loadAddon(w)
+  ns.scan()
+  ns.scan()
+  check("fallback: frill over staff not equipped", #w.equipped == 0)
+  check("fallback: frill over staff announced once", #w.printed == 1)
+end
+
 print("tests/run.lua: " .. passed .. " checks passed")
