@@ -131,11 +131,12 @@ function ns.sourceLabel()
   return "item level"
 end
 
--- True when the client says the player can never equip the link.
--- C_Item.IsEquippableItem (ItemDocumentation, live and forever) reads
--- the client's own proficiencies, so it stays accurate for every class
--- with no table to maintain. Only an explicit no blocks: a missing API
--- or a hiccup fails open.
+-- True when the link is not equipment at all (bags, consumables).
+-- C_Item.IsEquippableItem (ItemDocumentation, live and forever) answers
+-- whether the item goes in an equipment slot; it does not check class
+-- proficiency: a shield passes for a warlock, so shields get their own
+-- class gate below. Only an explicit no blocks: a missing API or a
+-- hiccup fails open.
 function ns.unusable(link)
   if type(C_Item) ~= "table" or type(C_Item.IsEquippableItem) ~= "function" then
     return false
@@ -143,6 +144,27 @@ function ns.unusable(link)
   local ok, equippable = pcall(C_Item.IsEquippableItem, link)
   if not ok then return false end
   return equippable == false
+end
+-- Poor (grey) items are vendor trash, never an upgrade on any path: no
+-- stats worth wearing. It bites hardest on the built-in fallback, where
+-- an empty slot takes anything, so the gate sits in evaluate and both
+-- paths share it. Unknown rarity fails open.
+-- Enum.ItemQuality.Poor = 0 (ItemQualitiesDocumentation, live and forever).
+ns.POOR_RARITY = 0
+-- Shield proficiency by class. Shields are the one armor type gated by
+-- proficiency instead of a best type, and the client offers no proficiency
+-- query (IsEquippableItem above answers the slot question only), so the
+-- fallback carries the table Pawn keeps as PawnNeverUsableStats behind
+-- item.CanEquip: warrior, paladin, shaman on every client. Either the
+-- subclass pair or the equip loc identifies a shield; unknown data fails
+-- open, like every other gate here.
+ns.SHIELD_CLASSES = { WARRIOR = true, PALADIN = true, SHAMAN = true }
+function ns.shieldBlocked(link)
+  local _, _, _, equipLoc, _, classID, subclassID = C_Item.GetItemInfoInstant(link)
+  local isShield = (classID == 4 and subclassID == 6) or equipLoc == "INVTYPE_SHIELD"
+  if not isShield then return false end
+  local _, classKey = UnitClass("player")
+  return classKey ~= nil and not ns.SHIELD_CLASSES[classKey]
 end
 -- Cosmetic gear is never an upgrade on any path: shirts and tabards
 -- carry no stats, and a fishing pole must never win a weapon slot.
@@ -166,14 +188,17 @@ end
 --     ilvl=bool, ilvlDiff=n|nil, itemLevel=n|nil }
 function ns.evaluate(link)
   -- Min-level gate, both paths (what CheckLevel=true did on Pawn's old API).
-  local _, _, _, _, minLevel = C_Item.GetItemInfo(link)
+  local _, _, rarity, _, minLevel = C_Item.GetItemInfo(link)
+  if rarity == ns.POOR_RARITY then
+    return { upgrade = false }
+  end
   if minLevel and UnitLevel("player") < minLevel then
     return { upgrade = false }
   end
   if ns.cosmetic(link) then
     return { upgrade = false }
   end
-  if ns.unusable(link) then
+  if ns.unusable(link) or ns.shieldBlocked(link) then
     return { upgrade = false }
   end
   if ns.pawnReady() then

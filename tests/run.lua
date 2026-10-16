@@ -2961,4 +2961,110 @@ do -- missing state APIs fail open (older client)
   check("missing state APIs fail open", #w.equipped == 1)
 end
 
+-- 107. Poor (grey) gear and class-unusable shields never equip, on either
+-- source. The Forever case: Pawn has no build there, so the built-in
+-- fallback judges alone: no score path to ignore greys, no CanEquip
+-- backstop to catch unwieldable verdicts.
+do -- the reported bug: grey shield on a warlock, empty off-hand
+  local w = newWorld()
+  w.pawn = false
+  w.playerClass = "WARLOCK"
+  local shield = "|cff9d9d9d|Hitem:2362|h[Bent Large Shield]|h|r"
+  w.levels[shield] = 10
+  w.rarities[shield] = 0
+  w.bags[0] = { shield }
+  w.slots[shield] = "INVTYPE_SHIELD"
+  w.classIDs[shield], w.subclassIDs[shield] = 4, 6
+  local ns = loadAddon(w)
+  ns.scan()
+  check("fallback: grey shield on warlock ignored", #w.equipped == 0 and #w.printed == 0)
+  check("fallback: firm no schedules no retry", #w.timers == 0)
+end
+do -- the rarity gate stands alone: grey sword, empty main hand, warrior
+  local w = newWorld()
+  w.pawn = false
+  w.playerClass = "WARRIOR"
+  local sword = "|cff9d9d9d|Hitem:2363|h[Bent Shortsword]|h|r"
+  w.levels[sword] = 10
+  w.rarities[sword] = 0
+  w.bags[0] = { sword }
+  w.slots[sword] = "INVTYPE_WEAPON"
+  w.classIDs[sword], w.subclassIDs[sword] = 2, 7
+  local ns = loadAddon(w)
+  ns.scan()
+  check("fallback: grey weapon ignored", #w.equipped == 0 and #w.printed == 0)
+end
+do -- the shield gate stands alone: green shield on a warlock
+  local w = newWorld()
+  w.pawn = false
+  w.playerClass = "WARLOCK"
+  local shield = "|cff1eff00|Hitem:2364|h[Green Shield]|h|r"
+  w.levels[shield] = 100
+  w.rarities[shield] = 2
+  w.bags[0] = { shield }
+  w.slots[shield] = "INVTYPE_SHIELD"
+  w.classIDs[shield], w.subclassIDs[shield] = 4, 6
+  local ns = loadAddon(w)
+  ns.scan()
+  check("fallback: green shield on warlock blocked", #w.equipped == 0 and #w.printed == 0)
+end
+do -- every shield class equips a green shield; nobody else does
+  local members = { "WARRIOR", "PALADIN", "SHAMAN" }
+  local others = { "HUNTER", "ROGUE", "MONK", "DRUID", "DEMONHUNTER",
+    "DEATHKNIGHT", "MAGE", "PRIEST", "WARLOCK", "EVOKER" }
+  for _, class in ipairs(members) do
+    local w = newWorld()
+    w.pawn = false
+    w.playerClass = class
+    local shield = "|cff1eff00|Hitem:2365|h[Green Shield]|h|r"
+    w.levels[shield] = 100
+    w.rarities[shield] = 2
+    w.bags[0] = { shield }
+    w.slots[shield] = "INVTYPE_SHIELD"
+    w.classIDs[shield], w.subclassIDs[shield] = 4, 6
+    local ns = loadAddon(w)
+    ns.scan()
+    check("fallback: shield equips for " .. class, #w.equipped == 1)
+  end
+  for _, class in ipairs(others) do
+    local w = newWorld()
+    w.pawn = false
+    w.playerClass = class
+    local shield = "|cff1eff00|Hitem:2365|h[Green Shield]|h|r"
+    w.levels[shield] = 100
+    w.rarities[shield] = 2
+    w.bags[0] = { shield }
+    w.slots[shield] = "INVTYPE_SHIELD"
+    w.classIDs[shield], w.subclassIDs[shield] = 4, 6
+    local ns = loadAddon(w)
+    ns.scan()
+    check("fallback: shield blocked for " .. class, #w.equipped == 0 and #w.printed == 0)
+  end
+end
+do -- Pawn path: a flagged grey is dropped too
+  local w = newWorld()
+  w.playerClass = "WARRIOR"
+  local sword = "|cff9d9d9d|Hitem:2363|h[Bent Shortsword]|h|r"
+  w.rarities[sword] = 0
+  w.bags[0] = { sword }
+  w.slots[sword] = "INVTYPE_WEAPON"
+  w.upgradeLists[sword] = upgrade("A", 0.05)
+  local ns = loadAddon(w)
+  ns.scan()
+  check("Pawn: flagged grey dropped", #w.equipped == 0 and #w.printed == 0)
+end
+do -- Pawn path: a flagged shield for a warlock is dropped
+  local w = newWorld()
+  w.playerClass = "WARLOCK"
+  local shield = "|cff1eff00|Hitem:2364|h[Green Shield]|h|r"
+  w.rarities[shield] = 2
+  w.bags[0] = { shield }
+  w.slots[shield] = "INVTYPE_SHIELD"
+  w.classIDs[shield], w.subclassIDs[shield] = 4, 6
+  w.upgradeLists[shield] = upgrade("A", 0.05)
+  local ns = loadAddon(w)
+  ns.scan()
+  check("Pawn: flagged shield for warlock dropped", #w.equipped == 0 and #w.printed == 0)
+end
+
 print("tests/run.lua: " .. passed .. " checks passed")
