@@ -1067,6 +1067,30 @@ function ns.clearGuard()
   ns.recentSwap = {}
 end
 
+-- Restricted states where the client forbids equipment changes without
+-- setting combat lockdown, so the InCombatLockdown check alone is not
+-- enough: dead or ghost (dying drops combat, and PLAYER_REGEN_ENABLED
+-- can fire straight into a forbidden equip), and pet battles (their own
+-- lockdown, invisible to InCombatLockdown). Calling EquipItemByName in
+-- either throws ADDON_ACTION_FORBIDDEN, so the scan waits them out with
+-- a guarded retry instead of erroring through BugGrabber.
+-- UnitIsDeadOrGhost (UnitDocumentation, live 12.1.5). C_PetBattles has
+-- no generated-doc entry for IsInBattle, but Blizzard's own shipped UI
+-- calls C_PetBattles.IsInBattle() in this build (ActionBarController,
+-- PetCollection), so it is verified there. Both reads are
+-- presence-gated and fail open.
+function ns.restricted()
+  if type(UnitIsDeadOrGhost) == "function" then
+    local ok, dead = pcall(UnitIsDeadOrGhost, "player")
+    if ok and dead then return true end
+  end
+  if type(C_PetBattles) == "table" and type(C_PetBattles.IsInBattle) == "function" then
+    local ok, battle = pcall(C_PetBattles.IsInBattle)
+    if ok and battle then return true end
+  end
+  return false
+end
+
 ns.UNSURE_RETRIES = 5 -- consecutive unsure scans before going quiet (~25s of grace for slow caches)
 -- Pawn may load after us or init late; one outstanding retry covers the race
 -- without stacking a new timer on every bag event.
@@ -1106,6 +1130,9 @@ function ns.scanInner()
   -- active (Pawn's verdict, or the built-in item-level fallback).
   if ns.pawnPending() then ns.retrySoon() return end
   if InCombatLockdown() then return end
+  -- Death and pet battles clear with no retrigger of their own, so
+  -- recheck on a guarded timer instead of waiting for a bag event.
+  if ns.restricted() then ns.retrySoon() return end
   ns.trackSwaps()
   ns.scanning = true
   local setCtx = ns.setContext()

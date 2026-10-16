@@ -48,8 +48,10 @@ local function loadAddon(world)
     GetSpecialization = function() return world.specIndex end,
     GetSpecializationInfo = function() return world.specID end,
   }
+  g.C_PetBattles = { IsInBattle = function() return world.petBattle end }
   g.UnitLevel = function() return world.playerLevel end
   g.UnitClass = function() return "Warrior", world.playerClass or "WARRIOR" end
+  g.UnitIsDeadOrGhost = function() return world.dead end
   g.PlaySound = function(id) world.playedSounds[#world.playedSounds + 1] = id end
   g.C_AddOns = {
     IsAddOnLoaded = function(n) return world.loadedAddons and world.loadedAddons[n] or false end,
@@ -232,7 +234,7 @@ end
 local function newWorld()
   return { bags = {}, slots = {}, minLevels = {}, levels = {}, classIDs = {}, subclassIDs = {}, time = 1000,
            equippedSlots = {}, equipped = {}, printed = {}, timers = {},
-           inCombat = false, pawn = true, pawnNil = {}, upgradeLists = {},
+           inCombat = false, dead = false, petBattle = false, pawn = true, pawnNil = {}, upgradeLists = {},
            armorBest = {}, rarities = {}, uniqueness = {}, notEquippable = {},
            bestLinks = {}, bestLinkCalls = {}, canEquip = {},
            setIDs = {}, itemIDs = {}, setBonusSpells = {}, setNames = {},
@@ -2908,6 +2910,55 @@ do -- built-in fallback: empty off-hand slot is no license to drop a staff
   ns.scan()
   check("fallback: frill over staff not equipped", #w.equipped == 0)
   check("fallback: frill over staff announced once", #w.printed == 1)
+end
+
+-- 106. Restricted states wait out the scan instead of a forbidden equip.
+do -- dead: dying drops combat, so regen can fire straight into this
+  local w = newWorld()
+  w.dead = true
+  local link = "|cffa335ee|Hitem:930|h[Helm]|h|r"
+  w.bags[0] = { link }
+  w.slots[link] = "INVTYPE_HEAD"
+  w.upgradeLists[link] = upgrade("A", 0.05)
+  local ns = loadAddon(w)
+  check("dead reads restricted", ns.restricted() == true)
+  ns.scan()
+  check("dead equips nothing", #w.equipped == 0)
+  check("dead waits silently", #w.printed == 0)
+  check("dead schedules recheck", #w.timers == 1)
+  w.dead = false -- rez: the recheck equips
+  local fn = table.remove(w.timers, 1)
+  if fn then fn() end
+  check("recheck after rez equips", #w.equipped == 1)
+end
+do -- pet battle: its own lockdown, invisible to InCombatLockdown
+  local w = newWorld()
+  w.petBattle = true
+  local link = "|cffa335ee|Hitem:931|h[Helm]|h|r"
+  w.bags[0] = { link }
+  w.slots[link] = "INVTYPE_HEAD"
+  w.upgradeLists[link] = upgrade("A", 0.05)
+  local ns = loadAddon(w)
+  check("pet battle reads restricted", ns.restricted() == true)
+  ns.scan()
+  check("pet battle equips nothing", #w.equipped == 0 and #w.printed == 0 and #w.timers == 1)
+  w.petBattle = false
+  local fn2 = table.remove(w.timers, 1)
+  if fn2 then fn2() end
+  check("recheck after battle equips", #w.equipped == 1)
+  check("alive reads unrestricted", ns.restricted() == false)
+end
+do -- missing state APIs fail open (older client)
+  local w = newWorld()
+  local link = "|cffa335ee|Hitem:932|h[Helm]|h|r"
+  w.bags[0] = { link }
+  w.slots[link] = "INVTYPE_HEAD"
+  w.upgradeLists[link] = upgrade("A", 0.05)
+  local ns = loadAddon(w)
+  w.env.UnitIsDeadOrGhost = nil
+  w.env.C_PetBattles = nil
+  ns.scan()
+  check("missing state APIs fail open", #w.equipped == 1)
 end
 
 print("tests/run.lua: " .. passed .. " checks passed")
