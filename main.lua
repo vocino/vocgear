@@ -69,6 +69,10 @@ function ns.opts()
   for k, v in pairs(defaults) do
     if type(ns.db[k]) ~= type(v) then ns.db[k] = v end
   end
+  -- The slider's own range (Settings panel), enforced here too so a
+  -- hand-edited value can never silence (or over-trigger) equips.
+  local pct = ns.db.minUpgradePct
+  if not (pct >= 0 and pct <= 25) then ns.db.minUpgradePct = defaults.minUpgradePct end
   return ns.db
 end
 
@@ -1462,7 +1466,8 @@ ns.frame:SetScript("OnEvent", function(_, event, arg1)
   if event == "WEEKLY_REWARDS_UPDATE" then
     ns.maybeVaultRecommend()
     return
-  end  if event == "ADDON_LOADED" then
+  end
+  if event == "ADDON_LOADED" then
     -- The client replaces the SavedVariables global with the loaded table
     -- after our file ran, so rebind or settings never persist.
     if arg1 == name then
