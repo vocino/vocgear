@@ -3,7 +3,7 @@
 ## Code Map
 
 - `main.lua`: the whole addon: bag scans, Pawn queries, equip rules, Settings panel, slash
-- `VocGear.toc` / `VocGear_Forever.toc`: addon metadata (dual toc,
+- `VocGear.toc` / `VocGear_Camelot.toc`: addon metadata (dual toc,
   shared `main.lua`; Pawn is an `OptionalDeps` guest, never required)
 - `tests/run.lua`: stub-harness regression tests (`lua tests/run.lua`)
 - `FAMILY.md`: conventions shared by every Voc addon
@@ -74,7 +74,7 @@ Follow `VERSIONING.md` when cutting a release; never retag.
 so edits go live on `/reload`. The client only loads `.toc`-listed files;
 dev files (`tests/`, `.git`, docs) sitting in the folder are ignored.
 `_classic_beta_\Interface\AddOns\VocGear` is the same junction for the
-Forever Beta client (1.60.1, `WowB.exe`), which loads `VocGear_Forever.toc`.
+Forever Beta client (1.60.1, `WowB.exe`), which loads `VocGear_Camelot.toc`.
 
 Recreate: `New-Item -ItemType Junction -Path '<AddOns>\VocGear' -Target D:\Code\vocgear`
 Remove: `Remove-Item '<AddOns>\VocGear'` (link only, never `-Recurse`)
