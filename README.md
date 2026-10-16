@@ -84,7 +84,7 @@ trinket whose twin is already worn is announced instead of equipped.
 ## What's inside
 
 - `main.lua`: the whole addon: scan bags, ask Pawn, equip or advise
-- `VocGear.toc` / `VocGear_Forever.toc`: metadata for Retail and the Forever client
+- `VocGear.toc` / `VocGear_Camelot.toc`: metadata for Retail and the Forever client
 - `tests/run.lua`: stub-harness regression tests, no WoW client needed
 
 ## Tests
