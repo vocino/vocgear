@@ -65,7 +65,10 @@ ns.defaults = defaults
 -- wrong type) reset to defaults instead of erroring or misbehaving.
 -- Unknown keys are left alone for forward compatibility.
 function ns.opts()
-  if type(ns.db) ~= "table" then ns.db = {} VocGearDB = ns.db end
+  if type(ns.db) ~= "table" then
+    ns.db = {}
+    VocGearDB = ns.db
+  end
   for k, v in pairs(defaults) do
     if type(ns.db[k]) ~= type(v) then ns.db[k] = v end
   end
@@ -812,6 +815,7 @@ end
 -- WEEKLY_REWARDS_UPDATE; the flag resets when nothing is claimable so
 -- next week's set recommends again. Gated by the announce setting like
 -- every other chat output.
+ns.vaultRecommended = false -- this reward set already recommended
 function ns.maybeVaultRecommend()
   if type(C_WeeklyRewards) ~= "table" then return end
   if type(C_WeeklyRewards.CanClaimRewards) ~= "function" then return end
@@ -1123,6 +1127,8 @@ end
 ns.UNSURE_RETRIES = 5 -- consecutive unsure scans before going quiet (~25s of grace for slow caches)
 -- Pawn may load after us or init late; one outstanding retry covers the race
 -- without stacking a new timer on every bag event.
+ns.retryPending = false -- a retry timer is already queued
+ns.unsureStreak = 0 -- consecutive unsure scans this streak
 function ns.retrySoon()
   if ns.retryPending then return end
   ns.retryPending = true
@@ -1244,7 +1250,7 @@ function ns.scanInner()
   -- nobody could answer yet get a few retries for slow caches, then go
   -- quiet until the next bag event so unresolvable links can't churn.
   if unsure then
-    ns.unsureStreak = (ns.unsureStreak or 0) + 1
+    ns.unsureStreak = ns.unsureStreak + 1
     if ns.unsureStreak <= ns.UNSURE_RETRIES then ns.retrySoon() end
   else
     ns.unsureStreak = 0
@@ -1474,7 +1480,8 @@ ns.frame:SetScript("OnEvent", function(_, event, arg1)
       -- A corrupt SavedVariables global (wrong type) resets to defaults
       -- instead of breaking every settings read for the session.
       if type(VocGearDB) ~= "table" then VocGearDB = {} end
-      ns.db = VocGearDB ns.ensureSettings()
+      ns.db = VocGearDB
+      ns.ensureSettings()
     end
     -- Cheap and idempotent, so run on every load: covers Pawn's button
     -- appearing late and the lazy Blizzard character UI creating
