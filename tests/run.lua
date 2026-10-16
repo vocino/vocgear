@@ -965,6 +965,12 @@ do
   check("wrong-type threshold reset", o.minUpgradePct == 0)
   check("wrong-type scale reset", o.scale == "")
   check("wrong-type audit reset", o.audit == false)
+  ns.db.minUpgradePct = 500
+  check("threshold above slider range reset", ns.opts().minUpgradePct == 0)
+  ns.db.minUpgradePct = -5
+  check("threshold below slider range reset", ns.opts().minUpgradePct == 0)
+  ns.db.minUpgradePct = 15
+  check("threshold inside slider range kept", ns.opts().minUpgradePct == 15)
 end
 
 -- 32. Malformed Pawn answers never wedge the scan.
