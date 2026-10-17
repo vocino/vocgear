@@ -152,12 +152,31 @@ function ns.unusable(link)
   if not ok then return false end
   return equippable == false
 end
--- Poor (grey) items are vendor trash, never an upgrade on any path: no
--- stats worth wearing. It bites hardest on the built-in fallback, where
--- an empty slot takes anything, so the gate sits in evaluate and both
--- paths share it. Unknown rarity fails open.
+-- Poor (grey) items are vendor trash: no stats worth wearing, so they
+-- never displace worn gear on any path. An empty slot takes anything,
+-- though -- even trash -- so the evaluate gate below grants a confirmed
+-- empty home slot an exception. Unknown rarity fails open.
 -- Enum.ItemQuality.Poor = 0 (ItemQualitiesDocumentation, live and forever).
 ns.POOR_RARITY = 0
+-- True when the link has a confirmed empty home slot (either side of a
+-- two-slot pair counts). Trash never displaces gear, but an empty slot
+-- takes anything -- so only a confirmed empty slot takes trash: unknown
+-- slots read as occupied, keeping uncached trash silent instead of
+-- announced.
+function ns.emptyHome(link)
+  local _, _, _, equipLoc = C_Item.GetItemInfoInstant(link)
+  if not equipLoc or equipLoc == "" then return false end
+  local pair = ns.slotPairs[equipLoc]
+  if pair then
+    for _, slotID in ipairs(pair) do
+      if GetInventoryItemLink("player", slotID) == nil then return true end
+    end
+    return false
+  end
+  local slotID = ns.homeSlot(equipLoc)
+  if not slotID then return false end
+  return GetInventoryItemLink("player", slotID) == nil
+end
 -- Shield proficiency by class. Shields are the one armor type gated by
 -- proficiency instead of a best type, and the client offers no proficiency
 -- query (IsEquippableItem above answers the slot question only), so the
@@ -187,6 +206,25 @@ function ns.cosmetic(link)
   if classID == 2 and subclassID == ns.FISHING_SUBCLASS then return true end
   return false
 end
+-- Profession tools are never an upgrade on any path: a skinning knife
+-- must never win a weapon slot, whatever its item level. Two legs.
+-- Modern profession equipment (Enum.ItemClass.Profession = 19): the
+-- retail Skinning Knife has been a Skinning Tool, not a weapon, since
+-- 10.0.2. Classic tool-weapons, which ARE weapon-slot items but of the
+-- Generic weapon subclass (Enum.ItemWeaponSubclass.Generic = 14,
+-- "Miscellaneous (Weapons)"): the classic Skinning Knife is a
+-- statless Weapon/Generic One-Hander, so nothing but its subclass
+-- separates it from a real dagger -- and wielding it breaks dagger
+-- abilities. Both enums verified in ItemConstantsDocumentation on
+-- live and forever. Unknown data fails open, like every other gate.
+ns.PROFESSION_CLASS = 19
+ns.GENERIC_WEAPON_SUBCLASS = 14
+function ns.professionTool(link)
+  local _, _, _, _, _, classID, subclassID = C_Item.GetItemInfoInstant(link)
+  if classID == ns.PROFESSION_CLASS then return true end
+  if classID == 2 and subclassID == ns.GENERIC_WEAPON_SUBCLASS then return true end
+  return false
+end
 
 -- Answer "is this link an upgrade?", through Pawn when it is driving and
 -- through the built-in item-level fallback otherwise.
@@ -196,17 +234,24 @@ end
 function ns.evaluate(link)
   -- Min-level gate, both paths (what CheckLevel=true did on Pawn's old API).
   local _, _, rarity, _, minLevel = C_Item.GetItemInfo(link)
-  if rarity == ns.POOR_RARITY then
-    return { upgrade = false }
-  end
   if minLevel and UnitLevel("player") < minLevel then
     return { upgrade = false }
   end
   if ns.cosmetic(link) then
     return { upgrade = false }
   end
+  if ns.professionTool(link) then
+    return { upgrade = false }
+  end
   if ns.unusable(link) or ns.shieldBlocked(link) then
     return { upgrade = false }
+  end
+  if rarity == ns.POOR_RARITY then
+    -- Vendor trash never displaces worn gear, but an empty slot takes
+    -- anything. The usability gates above already vetoed tools, cosmetics,
+    -- and unwieldable gear, so only a confirmed empty home slot takes
+    -- trash here (unknown slots read as occupied).
+    return { upgrade = ns.emptyHome(link) }
   end
   if ns.pawnReady() then
     return ns.evaluatePawn(link)
@@ -258,7 +303,7 @@ function ns.evaluatePawn(link)
 end
 
 -- Class best armor, Enum.ItemArmorSubclass (ItemConstantsDocumentation,
--- live 12.1.5): Cloth 1, Leather 2, Mail 3, Plate 4.
+-- live and forever): Cloth 1, Leather 2, Mail 3, Plate 4.
 ns.ARMOR_BEST = {
   WARRIOR = 4, PALADIN = 4, DEATHKNIGHT = 4,
   HUNTER = 3, SHAMAN = 3, EVOKER = 3,
@@ -267,9 +312,17 @@ ns.ARMOR_BEST = {
 }
 
 ns.ARMOR_NONGATED = { [0] = true, [5] = true, [6] = true } -- Generic, Cosmetic, Shield: no best type
+-- Leveling armor for transitioning classes: hunters and shamans wear
+-- leather until 40, warriors and paladins wear mail until 40 (classic
+-- rule; Pawn Core.lua: best armor unlocks at 40, no specialization
+-- level on classic). Below 40 a candidate of the leveling type passes
+-- like the best type; the worn-match below covers the rest.
+ns.ARMOR_LEVELING = { WARRIOR = 3, PALADIN = 3, HUNTER = 2, SHAMAN = 2 }
+ns.ARMOR_TRANSITION_LEVEL = 40
 -- Armor-type gate for the built-in path (Pawn's own gate is unavailable).
--- A candidate passes when it matches the class best type, or when it
--- matches what is already worn (leveling in a lower armor type).
+-- A candidate passes when it matches the class best type (or its pre-40
+-- leveling type), or when it matches what is already worn (leveling in
+-- a lower armor type).
 -- Cloaks and shields bypass the gate (subclass 6 has no best type; the
 -- usability gate covers proficiency). Unknown data reads as unsure (nil),
 -- never as a yes: a firm answer waits for the item cache.
@@ -281,6 +334,14 @@ function ns.armorBestBuiltin(link)
   local _, classKey = UnitClass("player")
   local best = classKey and ns.ARMOR_BEST[classKey]
   if best and subclassID == best then return true end
+  -- Leveling types (same classic rule): below 40 the leveling type
+  -- passes too. Additive only, so retail needs no branch: nothing the
+  -- strict rule accepted is refused, and every added type is wearable
+  -- on either client.
+  local leveling = classKey and ns.ARMOR_LEVELING[classKey]
+  if leveling and subclassID == leveling and (UnitLevel("player") or 0) < ns.ARMOR_TRANSITION_LEVEL then
+    return true
+  end
   local slotID = equipLoc and ns.primarySlot[equipLoc]
   local held = slotID and GetInventoryItemLink("player", slotID)
   if held then
@@ -290,7 +351,20 @@ function ns.armorBestBuiltin(link)
   return false
 end
 
--- Built-in upgrade check: pure item level, no stat weights. Fires only
+-- Trash loses ties: grey is definitionally statless, so a higher-rarity
+-- candidate at equal item level displaces it. Above grey, equal level
+-- with different stats is a stat question this fallback cannot answer,
+-- so ties stand. Unknown rarity fails closed (ties stand).
+function ns.rarityBeats(candLink, heldLink)
+  if not heldLink then return false end
+  local _, _, candRarity = C_Item.GetItemInfo(candLink)
+  local _, _, heldRarity = C_Item.GetItemInfo(heldLink)
+  if heldRarity ~= ns.POOR_RARITY then return false end
+  if type(candRarity) ~= "number" then return false end
+  return candRarity > heldRarity
+end
+-- Built-in upgrade check: pure item level, no stat weights, plus the
+-- trash tiebreak above. Fires only
 -- when Pawn is not driving. Same result shape as the Pawn path, so the
 -- scan, safeguards, and announcements downstream need no changes.
 function ns.evaluateBuiltin(link)
@@ -304,20 +378,26 @@ function ns.evaluateBuiltin(link)
   local pair = ns.slotPairs[equipLoc]
   if pair then
     -- Two-slot: upgrade when it beats the weaker of the pair.
-    local weakLevel
+    local weakLink, weakLevel
     for _, slotID in ipairs(pair) do
       local held = GetInventoryItemLink("player", slotID)
       if not held then
         return { upgrade = true, ilvl = true, ilvlDiff = candLevel, itemLevel = candLevel }
       end
       local lvl = C_Item.GetDetailedItemLevelInfo(held)
-      if lvl and (not weakLevel or lvl < weakLevel) then weakLevel = lvl end
+      if lvl and (not weakLevel or lvl < weakLevel) then weakLink, weakLevel = held, lvl end
     end
     if not weakLevel then return nil end
     local diff = candLevel - weakLevel
-    return { upgrade = diff > 0, ilvl = true, ilvlDiff = diff, itemLevel = candLevel }
+    if diff ~= 0 then
+      return { upgrade = diff > 0, ilvl = true, ilvlDiff = diff, itemLevel = candLevel }
+    end
+    if ns.rarityBeats(link, weakLink) then
+      return { upgrade = true, tiebreak = true, ilvlDiff = 0, itemLevel = candLevel }
+    end
+    return { upgrade = false, ilvl = true, ilvlDiff = 0, itemLevel = candLevel }
   end
-  local slotID = ns.primarySlot[equipLoc]
+  local slotID = ns.homeSlot(equipLoc)
   if not slotID then return { upgrade = false } end
   local held = GetInventoryItemLink("player", slotID)
   if not held then
@@ -326,7 +406,13 @@ function ns.evaluateBuiltin(link)
   local heldLevel = C_Item.GetDetailedItemLevelInfo(held)
   if not heldLevel then return nil end
   local diff = candLevel - heldLevel
-  return { upgrade = diff > 0, ilvl = true, ilvlDiff = diff, itemLevel = candLevel }
+  if diff ~= 0 then
+    return { upgrade = diff > 0, ilvl = true, ilvlDiff = diff, itemLevel = candLevel }
+  end
+  if ns.rarityBeats(link, held) then
+    return { upgrade = true, tiebreak = true, ilvlDiff = 0, itemLevel = candLevel }
+  end
+  return { upgrade = false, ilvl = true, ilvlDiff = 0, itemLevel = candLevel }
 end
 
 -- Armor-type gate. Pawn applies PawnIsArmorBestTypeForPlayer to score
@@ -365,6 +451,33 @@ ns.primarySlot = {
   INVTYPE_RANGED = 16, INVTYPE_RANGEDRIGHT = 16, INVTYPE_WEAPONOFFHAND = 17,
   INVTYPE_HOLDABLE = 17, INVTYPE_TABARD = 19,
 }
+-- Ranged home slot, per client layout. Classic-line clients equip bows,
+-- guns, and wands to a dedicated ranged slot (INVSLOT_RANGED = 18,
+-- Blizzard_FrameXMLBase/Constants.lua); on retail those same equip locs
+-- live in the main hand. Resolved the way Blizzard character panels do
+-- (C_PaperDollInfo.GetInventorySlotInfo, documented for both builds and
+-- used by the Camelot PaperDollFrame), falling back to the main hand when
+-- the client has no ranged slot. Cached: the layout never changes
+-- mid-session, and a failed lookup latches instead of retrying.
+ns.rangedHomeID = false -- cached slot id, false = not yet resolved
+function ns.rangedHome()
+  if ns.rangedHomeID == false then
+    ns.rangedHomeID = 16
+    if type(C_PaperDollInfo) == "table" and type(C_PaperDollInfo.GetInventorySlotInfo) == "function" then
+      local ok, id = pcall(C_PaperDollInfo.GetInventorySlotInfo, "RangedSlot")
+      if ok and type(id) == "number" then ns.rangedHomeID = id end
+    end
+  end
+  return ns.rangedHomeID
+end
+-- Home slot for an equip loc, honoring the ranged layout above.
+-- Every other slot id (1-17, 19) is the same on both clients.
+function ns.homeSlot(equipLoc)
+  if equipLoc == "INVTYPE_RANGED" or equipLoc == "INVTYPE_RANGEDRIGHT" then
+    return ns.rangedHome()
+  end
+  return equipLoc and ns.primarySlot[equipLoc] or nil
+end
 
 ns.HEIRLOOM_RARITY = 7
 function ns.isHeirloom(link)
@@ -908,6 +1021,12 @@ function ns.resolveTwoSlotSlot(equipLoc, ev, link)
     end
   end
   if weakSlot and candLevel > weakLevel then return weakSlot end
+  -- Rarity tiebreak (same rule as the fallback): a tied candidate that
+  -- outranks trash takes the weak slot.
+  if weakSlot and candLevel == weakLevel
+      and ns.rarityBeats(link, GetInventoryItemLink("player", weakSlot)) then
+    return weakSlot
+  end
   return nil
 end
 
@@ -949,7 +1068,8 @@ end
 
 function ns.why(ev)
   local base = ""
-  if ev.ilvl then base = " (item level +" .. tostring(ev.ilvlDiff or "?") .. ")"
+  if ev.tiebreak then base = " (higher rarity)"
+  elseif ev.ilvl then base = " (item level +" .. tostring(ev.ilvlDiff or "?") .. ")"
   elseif ev.percent and ev.percent >= 100 then base = " (big upgrade)"
   elseif ev.percent then base = string.format(" (+%.1f%%)", ev.percent * 100) end
   if ev.completes then base = base .. " (completes " .. ev.completes .. ")" end
@@ -984,7 +1104,7 @@ function ns.equip(link, ev, slotID)
   local checkSlot = slotID
   if not checkSlot then
     local _, _, _, equipLoc = C_Item.GetItemInfoInstant(link)
-    checkSlot = equipLoc and ns.primarySlot[equipLoc]
+    checkSlot = equipLoc and ns.homeSlot(equipLoc)
   end
   if checkSlot and ns.slotSettling(checkSlot, GetTime())
       and GetInventoryItemLink("player", checkSlot) then
@@ -1013,6 +1133,75 @@ function ns.equip(link, ev, slotID)
   return true
 end
 
+-- One-line diagnosis for /vg why: every veto that applies to a
+-- non-upgrade, so a silent refusal explains itself. Reports all
+-- applicable vetoes (order-free), never just the first, so a reordered
+-- evaluate cannot make it lie by omission. Upgrade lines reuse ns.why.
+function ns.whyNot(link, ev)
+  local reasons = {}
+  local _, _, rarity, _, minLevel = C_Item.GetItemInfo(link)
+  if minLevel and UnitLevel("player") < minLevel then
+    reasons[#reasons + 1] = "needs level " .. minLevel
+  end
+  local _, _, _, equipLoc = C_Item.GetItemInfoInstant(link)
+  if not equipLoc or equipLoc == "" then
+    reasons[#reasons + 1] = "unknown slot (item data uncached?)"
+  end
+  if ns.cosmetic(link) then
+    reasons[#reasons + 1] = "cosmetic, never equips"
+  end
+  if ns.professionTool(link) then
+    reasons[#reasons + 1] = "profession tool, never equips"
+  end
+  if ns.unusable(link) then
+    reasons[#reasons + 1] = "not equippable by you"
+  end
+  if ns.shieldBlocked(link) then
+    reasons[#reasons + 1] = "your class cannot use shields"
+  end
+  if rarity == ns.POOR_RARITY and not ns.emptyHome(link) then
+    reasons[#reasons + 1] = "grey, slot occupied"
+  end
+  if #reasons == 0 then
+    if ev == nil then
+      reasons[#reasons + 1] = "waiting on item data"
+    elseif ns.pawnReady() then
+      reasons[#reasons + 1] = "no Pawn upgrade verdict"
+    elseif ns.armorBestBuiltin(link) == false then
+      reasons[#reasons + 1] = "wrong armor type for your class"
+    elseif ev.ilvl and ev.ilvlDiff then
+      reasons[#reasons + 1] = "item level " .. tostring(ev.itemLevel or "?")
+        .. " vs worn " .. tostring((ev.itemLevel or 0) - (ev.ilvlDiff or 0))
+    else
+      reasons[#reasons + 1] = "not an upgrade"
+    end
+  end
+  return table.concat(reasons, "; ")
+end
+-- On-demand verdict report: one line per bag item, upgrades and
+-- refusals alike. Prints regardless of the announce setting: asking
+-- why is always answered. Failures read as "waiting on item data"
+-- and never abort the report.
+function ns.whySay()
+  local found = false
+  for bag = 0, NUM_BAG_SLOTS do
+    for slot = 1, C_Container.GetContainerNumSlots(bag) do
+      local link = C_Container.GetContainerItemLink(bag, slot)
+      if link then
+        found = true
+        local okEv, ev = pcall(ns.evaluate, link)
+        if not okEv or ev == nil then
+          ns.say(link .. ": waiting on item data")
+        elseif ev.upgrade then
+          ns.say(link .. ": upgrade" .. ns.why(ev))
+        else
+          ns.say(link .. ": not equipping (" .. ns.whyNot(link, ev) .. ")")
+        end
+      end
+    end
+  end
+  if not found then ns.say("bags hold no equipment") end
+end
 ns.flagged = {} -- links announced as not-auto-equipped, per session
 ns.scanning = false
 
@@ -1217,7 +1406,7 @@ function ns.scanInner()
                 end
               end
             else
-              local slotID = equipLoc and ns.primarySlot[equipLoc]
+              local slotID = equipLoc and ns.homeSlot(equipLoc)
               local held = slotID and GetInventoryItemLink("player", slotID)
               local breakThreshold, breakSet = ns.setBreaks(setCtx, link, held)
               local completes = ns.setSwapCompletes(held, readyThreshold, readySet)
@@ -1503,6 +1692,7 @@ ns.HELP = {
   "/vg            toggle auto-equip on/off",
   "/vg on|off     set auto-equip explicitly",
   "/vg scan       check bags now",
+  "/vg why        explain every bag item",
   "/vg vault      recommend a Great Vault pick",
   "/vg announce   toggle chat announcements",
   "/vg config     open Settings > AddOns > VocGear",
@@ -1545,6 +1735,8 @@ SlashCmdList.VOCGEAR = function(msg)
     ns.checkNow()
   elseif msg == "vault" then
     ns.vaultSay()
+  elseif msg == "why" then
+    ns.whySay()
   else
     ns.help()
   end
