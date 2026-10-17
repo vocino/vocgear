@@ -3249,14 +3249,14 @@ do -- /vg why reports each bag item with its reason
   w.rarities[cloak] = 0
   w.bags[0] = { cloak }
   w.slots[cloak] = "INVTYPE_CLOAK"
-  local ns = loadAddon(w)
+  loadAddon(w)
   w.env.SlashCmdList.VOCGEAR("why")
   check("why: slash reports link", w.printed[1]:find("Dingy Cloak", 1, true) ~= nil)
   check("why: slash reports reason", w.printed[1]:find("grey, slot occupied", 1, true) ~= nil)
 end
 do -- /vg why on empty bags says so
   local w = newWorld()
-  local ns = loadAddon(w)
+  loadAddon(w)
   w.env.SlashCmdList.VOCGEAR("why")
   check("why: empty bags", w.printed[1]:find("bags hold no equipment", 1, true) ~= nil)
 end
