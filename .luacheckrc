@@ -24,7 +24,7 @@ globals = {
 -- WoW API and UI globals read by the addon.
 read_globals = {
   "_G",
-  "C_AddOns", "C_Container", "C_Item", "C_PetBattles", "C_SpecializationInfo", "C_Timer",
+  "C_AddOns", "C_Container", "C_Item", "C_PaperDollInfo", "C_PetBattles", "C_SpecializationInfo", "C_Timer",
   "C_WeeklyRewards",
   "CreateFrame", "GameTooltip", "GetInventoryItemLink",
   "GetTime", "InCombatLockdown", "NUM_BAG_SLOTS", "PaperDollFrame",

@@ -77,7 +77,8 @@ local function loadAddon(world)
     INVTYPE_CHEST = 5, INVTYPE_WAIST = 6, INVTYPE_LEGS = 7, INVTYPE_FEET = 8,
     INVTYPE_WRIST = 9, INVTYPE_HAND = 10, INVTYPE_CLOAK = 15, INVTYPE_WEAPON = 16,
     INVTYPE_SHIELD = 17, INVTYPE_2HWEAPON = 16, INVTYPE_WEAPONMAINHAND = 16,
-    INVTYPE_WEAPONOFFHAND = 17, INVTYPE_HOLDABLE = 17, INVTYPE_RANGED = 16 }
+    INVTYPE_WEAPONOFFHAND = 17, INVTYPE_HOLDABLE = 17, INVTYPE_RANGED = world.rangedSlot or 16,
+    INVTYPE_RANGEDRIGHT = world.rangedSlot or 16 }
   local equipStub = function(item, slot)
     world.equipped[#world.equipped + 1] = { item = item, slot = slot }
     -- Like the real client, the equipped item leaves the bags.
@@ -101,6 +102,9 @@ local function loadAddon(world)
   g.GetInventoryItemLink = function(_, slot) return world.equippedSlots[slot] end
   g.C_Timer = {
     After = function(_, fn) world.timers[#world.timers + 1] = fn end,
+  }
+  g.C_PaperDollInfo = {
+    GetInventorySlotInfo = function(_) return world.rangedSlot end,
   }
   g.Enum = { CachedRewardType = { Item = 1, Currency = 2 } }
   g.C_WeeklyRewards = {
@@ -2967,10 +2971,11 @@ do -- missing state APIs fail open (older client)
   check("missing state APIs fail open", #w.equipped == 1)
 end
 
--- 107. Poor (grey) gear and class-unusable shields never equip, on either
--- source. The Forever case: Pawn has no build there, so the built-in
--- fallback judges alone: no score path to ignore greys, no CanEquip
--- backstop to catch unwieldable verdicts.
+-- 107. Poor (grey) gear never displaces worn gear, and class-unusable
+-- shields never equip, on either source -- but an empty slot takes
+-- anything, trash included. The Forever case: Pawn has no build there,
+-- so the built-in fallback judges alone: no score path to ignore greys,
+-- no CanEquip backstop to catch unwieldable verdicts.
 do -- the reported bug: grey shield on a warlock, empty off-hand
   local w = newWorld()
   w.pawn = false
@@ -2986,19 +2991,21 @@ do -- the reported bug: grey shield on a warlock, empty off-hand
   check("fallback: grey shield on warlock ignored", #w.equipped == 0 and #w.printed == 0)
   check("fallback: firm no schedules no retry", #w.timers == 0)
 end
-do -- the rarity gate stands alone: grey sword, empty main hand, warrior
+do -- the rarity gate stands alone: grey sword never displaces a worn blade
   local w = newWorld()
   w.pawn = false
   w.playerClass = "WARRIOR"
+  local worn = "|cffffffff|Hitem:2134|h[Worn Sword]|h|r"
   local sword = "|cff9d9d9d|Hitem:2363|h[Bent Shortsword]|h|r"
-  w.levels[sword] = 10
+  w.equippedSlots[16] = worn
+  w.levels[worn], w.levels[sword] = 15, 10
   w.rarities[sword] = 0
   w.bags[0] = { sword }
   w.slots[sword] = "INVTYPE_WEAPON"
   w.classIDs[sword], w.subclassIDs[sword] = 2, 7
   local ns = loadAddon(w)
   ns.scan()
-  check("fallback: grey weapon ignored", #w.equipped == 0 and #w.printed == 0)
+  check("fallback: grey weapon never displaces", #w.equipped == 0 and #w.printed == 0)
 end
 do -- the shield gate stands alone: green shield on a warlock
   local w = newWorld()
@@ -3047,17 +3054,19 @@ do -- every shield class equips a green shield; nobody else does
     check("fallback: shield blocked for " .. class, #w.equipped == 0 and #w.printed == 0)
   end
 end
-do -- Pawn path: a flagged grey is dropped too
+do -- Pawn path: a flagged grey never displaces worn gear either
   local w = newWorld()
   w.playerClass = "WARRIOR"
+  local worn = "|cffffffff|Hitem:2134|h[Worn Sword]|h|r"
   local sword = "|cff9d9d9d|Hitem:2363|h[Bent Shortsword]|h|r"
+  w.equippedSlots[16] = worn
   w.rarities[sword] = 0
   w.bags[0] = { sword }
   w.slots[sword] = "INVTYPE_WEAPON"
   w.upgradeLists[sword] = upgrade("A", 0.05)
   local ns = loadAddon(w)
   ns.scan()
-  check("Pawn: flagged grey dropped", #w.equipped == 0 and #w.printed == 0)
+  check("Pawn: flagged grey never displaces", #w.equipped == 0 and #w.printed == 0)
 end
 do -- Pawn path: a flagged shield for a warlock is dropped
   local w = newWorld()
@@ -3073,4 +3082,337 @@ do -- Pawn path: a flagged shield for a warlock is dropped
   check("Pawn: flagged shield for warlock dropped", #w.equipped == 0 and #w.printed == 0)
 end
 
+do -- fallback: a skinning knife never displaces a worn dagger
+  local w = newWorld()
+  w.pawn = false
+  local dagger = "|cffffffff|Hitem:2135|h[Worn Dagger]|h|r"
+  local knife = "|cffffffff|Hitem:7005|h[Skinning Knife]|h|r"
+  w.equippedSlots[16] = dagger
+  w.levels[dagger], w.levels[knife] = 2, 4
+  w.bags[0] = { knife }
+  w.slots[knife] = "INVTYPE_WEAPON"
+  w.classIDs[knife], w.subclassIDs[knife] = 2, 14 -- Weapon/Generic, like the classic tool
+  w.classIDs[dagger], w.subclassIDs[dagger] = 2, 15
+  local ns = loadAddon(w)
+  ns.scan()
+  check("fallback: skinning knife over dagger refused", #w.equipped == 0 and #w.printed == 0)
+  check("fallback: skinning knife schedules no retry", #w.timers == 0)
+end
+do -- fallback: a real dagger upgrade still equips (gate precision)
+  local w = newWorld()
+  w.pawn = false
+  local worn = "|cffffffff|Hitem:2135|h[Worn Dagger]|h|r"
+  local sharp = "|cff1eff00|Hitem:2136|h[Sharp Dagger]|h|r"
+  w.equippedSlots[16] = worn
+  w.levels[worn], w.levels[sharp] = 2, 5
+  w.bags[0] = { sharp }
+  w.slots[sharp] = "INVTYPE_WEAPON"
+  w.classIDs[sharp], w.subclassIDs[sharp] = 2, 15
+  w.classIDs[worn], w.subclassIDs[worn] = 2, 15
+  local ns = loadAddon(w)
+  ns.scan()
+  check("fallback: sharper dagger equips", #w.equipped == 1)
+end
+do -- Pawn path: a Pawn-flagged skinning knife is dropped too
+  local w = newWorld()
+  local knife = "|cffffffff|Hitem:7005|h[Skinning Knife]|h|r"
+  w.bags[0] = { knife }
+  w.slots[knife] = "INVTYPE_WEAPON"
+  w.classIDs[knife], w.subclassIDs[knife] = 2, 14
+  w.upgradeLists[knife] = upgrade("A", 0.05)
+  local ns = loadAddon(w)
+  ns.scan()
+  check("Pawn: flagged skinning knife dropped", #w.equipped == 0 and #w.printed == 0)
+  check("Pawn: skinning knife schedules no retry", #w.timers == 0)
+end
+do -- Pawn path: profession-class equipment is never a combat upgrade
+  local w = newWorld()
+  local tool = "|cff1eff00|Hitem:7010|h[Tool]|h|r"
+  w.bags[0] = { tool }
+  w.slots[tool] = "INVTYPE_PROFESSION_TOOL"
+  w.classIDs[tool], w.subclassIDs[tool] = 19, 0 -- Enum.ItemClass.Profession
+  w.upgradeLists[tool] = upgrade("A", 0.05)
+  local ns = loadAddon(w)
+  ns.scan()
+  check("Pawn: profession tool dropped", #w.equipped == 0 and #w.printed == 0)
+end
+do -- fallback: a grey cloak fills an empty back slot
+  local w = newWorld()
+  w.pawn = false
+  local cloak = "|cff9d9d9d|Hitem:2375|h[Dingy Cloak]|h|r"
+  w.levels[cloak] = 5
+  w.rarities[cloak] = 0
+  w.bags[0] = { cloak }
+  w.slots[cloak] = "INVTYPE_CLOAK"
+  local ns = loadAddon(w)
+  ns.scan()
+  check("fallback: grey cloak fills empty back", #w.equipped == 1 and w.equipped[1].item == cloak)
+end
+do -- fallback: a grey cloak never displaces a worn cloak
+  local w = newWorld()
+  w.pawn = false
+  local worn = "|cff1eff00|Hitem:2376|h[Green Cloak]|h|r"
+  local cloak = "|cff9d9d9d|Hitem:2375|h[Dingy Cloak]|h|r"
+  w.equippedSlots[15] = worn
+  w.levels[worn], w.levels[cloak] = 10, 5
+  w.rarities[cloak] = 0
+  w.bags[0] = { cloak }
+  w.slots[cloak] = "INVTYPE_CLOAK"
+  local ns = loadAddon(w)
+  ns.scan()
+  check("fallback: grey cloak never displaces", #w.equipped == 0 and #w.printed == 0)
+end
+do -- Pawn path: a grey cloak fills an empty back slot too
+  local w = newWorld()
+  local cloak = "|cff9d9d9d|Hitem:2375|h[Dingy Cloak]|h|r"
+  w.levels[cloak] = 5
+  w.rarities[cloak] = 0
+  w.bags[0] = { cloak }
+  w.slots[cloak] = "INVTYPE_CLOAK"
+  local ns = loadAddon(w)
+  ns.scan()
+  check("Pawn: grey cloak fills empty back", #w.equipped == 1 and w.equipped[1].item == cloak)
+end
+do -- an above-level grey waits, even for an empty slot
+  local w = newWorld()
+  w.pawn = false
+  local cloak = "|cff9d9d9d|Hitem:2375|h[Dingy Cloak]|h|r"
+  w.levels[cloak] = 5
+  w.rarities[cloak] = 0
+  w.minLevels[cloak] = 85
+  w.bags[0] = { cloak }
+  w.slots[cloak] = "INVTYPE_CLOAK"
+  local ns = loadAddon(w)
+  ns.scan()
+  check("above-level grey waits for empty back", #w.equipped == 0 and #w.printed == 0)
+end
+do -- why: above-level names the level
+  local w = newWorld()
+  local link = "|cffa335ee|Hitem:559|h[Helm]|h|r"
+  w.slots[link] = "INVTYPE_HEAD"
+  w.minLevels[link] = 85
+  local ns = loadAddon(w)
+  check("why: needs level", ns.whyNot(link, {}) :find("needs level 85", 1, true) ~= nil)
+end
+do -- why: grey into an occupied slot says so
+  local w = newWorld()
+  local held = "|cff1eff00|Hitem:2376|h[Green Cloak]|h|r"
+  local cloak = "|cff9d9d9d|Hitem:2375|h[Dingy Cloak]|h|r"
+  w.equippedSlots[15] = held
+  w.rarities[cloak] = 0
+  w.bags[0] = { cloak }
+  w.slots[cloak] = "INVTYPE_CLOAK"
+  local ns = loadAddon(w)
+  check("why: grey occupied", ns.whyNot(cloak, { upgrade = false }):find("grey, slot occupied", 1, true) ~= nil)
+end
+do -- why: a Pawn silence names Pawn
+  local w = newWorld()
+  local link = "|cffa335ee|Hitem:560|h[Helm]|h|r"
+  w.bags[0] = { link }
+  w.slots[link] = "INVTYPE_HEAD"
+  local ns = loadAddon(w)
+  local ev = ns.evaluate(link)
+  check("why: no Pawn verdict", ns.whyNot(link, ev):find("no Pawn upgrade verdict", 1, true) ~= nil)
+end
+do -- why: a beaten item level shows both numbers
+  local w = newWorld()
+  w.pawn = false
+  local worn = "|cff1eff00|Hitem:2376|h[Green Belt]|h|r"
+  local cand = "|cff1eff00|Hitem:2377|h[Worn Belt]|h|r"
+  w.equippedSlots[6] = worn
+  w.levels[worn], w.levels[cand] = 10, 5
+  w.bags[0] = { cand }
+  w.slots[cand] = "INVTYPE_WAIST"
+  w.classIDs[cand], w.subclassIDs[cand] = 4, 4
+  w.classIDs[worn], w.subclassIDs[worn] = 4, 4
+  local ns = loadAddon(w)
+  local ev = ns.evaluate(cand)
+  check("why: ilvl vs worn", ns.whyNot(cand, ev):find("item level 5 vs worn 10", 1, true) ~= nil)
+end
+do -- why: wrong armor type for the class says so
+  local w = newWorld()
+  w.pawn = false
+  w.playerClass = "MAGE"
+  local belt = "|cff1eff00|Hitem:2378|h[Leather Belt]|h|r"
+  w.bags[0] = { belt }
+  w.slots[belt] = "INVTYPE_WAIST"
+  w.classIDs[belt], w.subclassIDs[belt] = 4, 2
+  local ns = loadAddon(w)
+  local ev = ns.evaluate(belt)
+  check("why: wrong armor type", ns.whyNot(belt, ev):find("wrong armor type", 1, true) ~= nil)
+end
+do -- /vg why reports each bag item with its reason
+  local w = newWorld()
+  local held = "|cff1eff00|Hitem:2376|h[Green Cloak]|h|r"
+  local cloak = "|cff9d9d9d|Hitem:2375|h[Dingy Cloak]|h|r"
+  w.equippedSlots[15] = held
+  w.rarities[cloak] = 0
+  w.bags[0] = { cloak }
+  w.slots[cloak] = "INVTYPE_CLOAK"
+  local ns = loadAddon(w)
+  w.env.SlashCmdList.VOCGEAR("why")
+  check("why: slash reports link", w.printed[1]:find("Dingy Cloak", 1, true) ~= nil)
+  check("why: slash reports reason", w.printed[1]:find("grey, slot occupied", 1, true) ~= nil)
+end
+do -- /vg why on empty bags says so
+  local w = newWorld()
+  local ns = loadAddon(w)
+  w.env.SlashCmdList.VOCGEAR("why")
+  check("why: empty bags", w.printed[1]:find("bags hold no equipment", 1, true) ~= nil)
+end
+do -- fallback: a low-level hunter wears leather (pre-40 leveling type)
+  local w = newWorld()
+  w.pawn = false
+  w.playerLevel = 5
+  w.playerClass = "HUNTER"
+  local belt = "|cff1eff00|Hitem:2186|h[Outfitter Belt]|h|r"
+  w.levels[belt] = 5
+  w.bags[0] = { belt }
+  w.slots[belt] = "INVTYPE_WAIST"
+  w.classIDs[belt], w.subclassIDs[belt] = 4, 2
+  local ns = loadAddon(w)
+  ns.scan()
+  check("fallback: young hunter belts leather", #w.equipped == 1 and w.equipped[1].item == belt)
+end
+do -- fallback: past 40 the hunter holds out for mail
+  local w = newWorld()
+  w.pawn = false
+  w.playerClass = "HUNTER"
+  local belt = "|cff1eff00|Hitem:2186|h[Outfitter Belt]|h|r"
+  w.levels[belt] = 5
+  w.bags[0] = { belt }
+  w.slots[belt] = "INVTYPE_WAIST"
+  w.classIDs[belt], w.subclassIDs[belt] = 4, 2
+  local ns = loadAddon(w)
+  ns.scan()
+  check("fallback: grown hunter refuses leather", #w.equipped == 0 and #w.printed == 0)
+end
+do -- fallback: a low-level warrior wears mail (pre-40 leveling type)
+  local w = newWorld()
+  w.pawn = false
+  w.playerLevel = 5
+  w.playerClass = "WARRIOR"
+  local belt = "|cff1eff00|Hitem:2187|h[Mail Belt]|h|r"
+  w.levels[belt] = 5
+  w.bags[0] = { belt }
+  w.slots[belt] = "INVTYPE_WAIST"
+  w.classIDs[belt], w.subclassIDs[belt] = 4, 3
+  local ns = loadAddon(w)
+  ns.scan()
+  check("fallback: young warrior belts mail", #w.equipped == 1 and w.equipped[1].item == belt)
+end
+do -- fallback: white displaces grey on an item-level tie
+  local w = newWorld()
+  w.pawn = false
+  local grey = "|cff9d9d9d|Hitem:2375|h[Dingy Belt]|h|r"
+  local white = "|cff1eff00|Hitem:2377|h[Plain Belt]|h|r"
+  w.equippedSlots[6] = grey
+  w.levels[grey], w.levels[white] = 10, 10
+  w.rarities[grey], w.rarities[white] = 0, 1
+  w.bags[0] = { white }
+  w.slots[white] = "INVTYPE_WAIST"
+  w.classIDs[white], w.subclassIDs[white] = 4, 4
+  w.classIDs[grey], w.subclassIDs[grey] = 4, 4
+  local ns = loadAddon(w)
+  ns.scan()
+  check("fallback: white displaces grey on tie", #w.equipped == 1 and w.equipped[1].item == white)
+  check("fallback: tiebreak names rarity", w.printed[1]:find("higher rarity", 1, true) ~= nil)
+end
+do -- fallback: grey never displaces white, even tied
+  local w = newWorld()
+  w.pawn = false
+  local white = "|cff1eff00|Hitem:2377|h[Plain Belt]|h|r"
+  local grey = "|cff9d9d9d|Hitem:2375|h[Dingy Belt]|h|r"
+  w.equippedSlots[6] = white
+  w.levels[white], w.levels[grey] = 10, 10
+  w.rarities[white], w.rarities[grey] = 1, 0
+  w.bags[0] = { grey }
+  w.slots[grey] = "INVTYPE_WAIST"
+  w.classIDs[grey], w.subclassIDs[grey] = 4, 4
+  local ns = loadAddon(w)
+  ns.scan()
+  check("fallback: grey never displaces on tie", #w.equipped == 0 and #w.printed == 0)
+end
+do -- fallback: above grey, ties stand (stat question, not a rarity one)
+  local w = newWorld()
+  w.pawn = false
+  local worn = "|cff1eff00|Hitem:2377|h[Plain Belt]|h|r"
+  local cand = "|cff1eff00|Hitem:2379|h[Green Belt]|h|r"
+  w.equippedSlots[6] = worn
+  w.levels[worn], w.levels[cand] = 10, 10
+  w.rarities[worn], w.rarities[cand] = 1, 2
+  w.bags[0] = { cand }
+  w.slots[cand] = "INVTYPE_WAIST"
+  w.classIDs[cand], w.subclassIDs[cand] = 4, 4
+  local ns = loadAddon(w)
+  ns.scan()
+  check("fallback: green-white tie stands", #w.equipped == 0 and #w.printed == 0)
+end
+do -- fallback two-slot: a tied white takes the grey ring slot when asked
+  local w = newWorld()
+  w.pawn = false
+  w.savedVars = { autoTwoSlot = true }
+  local greyRing = "|cff9d9d9d|Hitem:2380|h[Dingy Ring]|h|r"
+  local otherRing = "|cff1eff00|Hitem:2381|h[Plain Ring]|h|r"
+  local cand = "|cff1eff00|Hitem:2382|h[Bright Ring]|h|r"
+  w.equippedSlots[11], w.equippedSlots[12] = greyRing, otherRing
+  w.levels[greyRing], w.levels[otherRing], w.levels[cand] = 10, 12, 10
+  w.rarities[greyRing], w.rarities[cand] = 0, 1
+  w.classIDs[cand], w.subclassIDs[cand] = 4, 0 -- rings read as generic armor
+  w.bags[0] = { cand }
+  w.slots[cand] = "INVTYPE_FINGER"
+  local ns = loadAddon(w)
+  clientLoaded(w)
+  ns.scan()
+  check("fallback: tied white takes grey ring slot", #w.equipped == 1 and w.equipped[1].slot == 11)
+end
+do -- Forever layout: a bow upgrade compares against the ranged slot (18)
+  local w = newWorld()
+  w.pawn = false
+  w.playerClass = "HUNTER"
+  w.rangedSlot = 18
+  local sword = "|cff1eff00|Hitem:2136|h[Sword]|h|r"
+  local oldbow = "|cff1eff00|Hitem:2401|h[Old Bow]|h|r"
+  local candbow = "|cff1eff00|Hitem:2402|h[New Bow]|h|r"
+  w.equippedSlots[16], w.equippedSlots[18] = sword, oldbow
+  w.levels[sword], w.levels[oldbow], w.levels[candbow] = 20, 5, 10
+  w.bags[0] = { candbow }
+  w.slots[candbow] = "INVTYPE_RANGED"
+  w.classIDs[candbow], w.subclassIDs[candbow] = 2, 2
+  local ns = loadAddon(w)
+  ns.scan()
+  check("forever: bow displaces bow at 18", #w.equipped == 1 and w.equipped[1].item == candbow)
+  check("forever: ranged slot holds the bow", w.equippedSlots[18] == candbow)
+end
+do -- retail layout: no ranged slot, bows live in the main hand (16)
+  local w = newWorld()
+  w.pawn = false
+  w.playerClass = "HUNTER"
+  local oldbow = "|cff1eff00|Hitem:2401|h[Old Bow]|h|r"
+  local candbow = "|cff1eff00|Hitem:2402|h[New Bow]|h|r"
+  w.equippedSlots[16] = oldbow
+  w.levels[oldbow], w.levels[candbow] = 5, 10
+  w.bags[0] = { candbow }
+  w.slots[candbow] = "INVTYPE_RANGED"
+  w.classIDs[candbow], w.subclassIDs[candbow] = 2, 2
+  local ns = loadAddon(w)
+  ns.scan()
+  check("retail: bow displaces bow at 16", #w.equipped == 1 and w.equippedSlots[16] == candbow)
+end
+do -- missing paperdoll API falls back to the main hand (16)
+  local w = newWorld()
+  w.pawn = false
+  w.playerClass = "HUNTER"
+  local oldbow = "|cff1eff00|Hitem:2401|h[Old Bow]|h|r"
+  local candbow = "|cff1eff00|Hitem:2402|h[New Bow]|h|r"
+  w.equippedSlots[16] = oldbow
+  w.levels[oldbow], w.levels[candbow] = 5, 10
+  w.bags[0] = { candbow }
+  w.slots[candbow] = "INVTYPE_RANGED"
+  w.classIDs[candbow], w.subclassIDs[candbow] = 2, 2
+  local ns = loadAddon(w)
+  w.env.C_PaperDollInfo = nil
+  ns.scan()
+  check("no paperdoll API: bow still equips at 16", #w.equipped == 1 and w.equippedSlots[16] == candbow)
+end
 print("tests/run.lua: " .. passed .. " checks passed")
