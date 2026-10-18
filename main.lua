@@ -1097,6 +1097,14 @@ function ns.equip(link, ev, slotID)
     end
     return false
   end
+  -- Lockdown can start after the scan's entry check but before this
+  -- equip lands; the client answers that call with
+  -- ADDON_ACTION_FORBIDDEN, so re-check here and skip instead.
+  -- Combat ends with PLAYER_REGEN_ENABLED (which rescans), but death
+  -- and pet battles clear with no retrigger of their own, so those
+  -- recheck on a guarded timer.
+  if InCombatLockdown() then return false end
+  if ns.restricted() then ns.retrySoon() return false end
   -- Settle: never displace what WE just equipped. The check slot is the
   -- forced two-slot target, or the single-slot item's home slot; unknown
   -- slots fail open to the old behavior. Empty slots are exempt: with

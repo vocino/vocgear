@@ -532,6 +532,24 @@ do
   ns.scan()
   check("no equip in combat", #w.equipped == 0)
 end
+-- 16b. Combat starting mid-scan: the entry check already passed, so the
+-- equip-time guard must still refuse (otherwise the client fires
+-- ADDON_ACTION_FORBIDDEN through BugGrabber).
+do
+  local w = newWorld()
+  local link = "|cffa335ee|Hitem:335|h[Helm]|h|r"
+  w.bags[0] = { link }
+  w.slots[link] = "INVTYPE_HEAD"
+  w.upgradeLists[link] = upgrade("A", 0.05)
+  local ns = loadAddon(w)
+  local realEvaluate = ns.evaluate
+  ns.evaluate = function(l)
+    w.inCombat = true -- combat starts after the scan's entry check
+    return realEvaluate(l)
+  end
+  ns.scan()
+  check("no equip when combat starts mid-scan", #w.equipped == 0)
+end
 
 -- 17. Pawn missing: the built-in fallback drives, not idle.
 do
