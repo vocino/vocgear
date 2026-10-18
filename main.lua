@@ -1674,6 +1674,7 @@ function VocGear_CompartmentLeave()
   if type(GameTooltip) == "table" then GameTooltip:Hide() end
 end
 
+---@type Frame
 ns.frame = CreateFrame("Frame")
 ns.frame:RegisterEvent("ADDON_LOADED")
 ns.frame:RegisterEvent("BAG_UPDATE_DELAYED")
