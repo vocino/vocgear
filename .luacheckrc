@@ -30,7 +30,7 @@ read_globals = {
   "GetTime", "InCombatLockdown", "NUM_BAG_SLOTS", "PaperDollFrame",
   "Enum",
   "PlaySound", "SOUNDKIT", -- presence-gated; ns.play falls back to numeric IDs
-  "Settings", "MinimalSliderWithSteppersMixin", "UnitClass", "UnitIsDeadOrGhost", "UnitLevel",
+  "Settings", "MinimalSliderWithSteppersMixin", "UnitAffectingCombat", "UnitClass", "UnitIsDeadOrGhost", "UnitLevel",
   "CreateSettingsListSectionHeaderInitializer", "SettingsPanel",
   "hooksecurefunc", "strtrim",
   -- Pawn (optional guest: drives verdicts when present)

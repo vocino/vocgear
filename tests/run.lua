@@ -72,6 +72,7 @@ local function loadAddon(world)
   }
   g.GetTime = function() return world.time end
   g.InCombatLockdown = function() return world.inCombat end
+  g.UnitAffectingCombat = function() return world.affectingCombat end
   -- Game-chosen equip slot per equip loc, mirroring Pawn's slot table.
   local equipLocSlot = { INVTYPE_HEAD = 1, INVTYPE_NECK = 2, INVTYPE_SHOULDER = 3,
     INVTYPE_CHEST = 5, INVTYPE_WAIST = 6, INVTYPE_LEGS = 7, INVTYPE_FEET = 8,
@@ -238,7 +239,7 @@ end
 local function newWorld()
   return { bags = {}, slots = {}, minLevels = {}, levels = {}, classIDs = {}, subclassIDs = {}, time = 1000,
            equippedSlots = {}, equipped = {}, printed = {}, timers = {},
-           inCombat = false, dead = false, petBattle = false, pawn = true, pawnNil = {}, upgradeLists = {},
+           inCombat = false, affectingCombat = false, dead = false, petBattle = false, pawn = true, pawnNil = {}, upgradeLists = {},
            armorBest = {}, rarities = {}, uniqueness = {}, notEquippable = {},
            bestLinks = {}, bestLinkCalls = {}, canEquip = {},
            setIDs = {}, itemIDs = {}, setBonusSpells = {}, setNames = {},
@@ -549,6 +550,51 @@ do
   end
   ns.scan()
   check("no equip when combat starts mid-scan", #w.equipped == 0)
+end
+
+-- 16c. Pull frames: the unit reads in-combat before lockdown engages,
+-- and the client already forbids the equip there, so the scan treats
+-- both as combat.
+do
+  local w = newWorld()
+  w.affectingCombat = true -- pull landed, lockdown not yet engaged
+  local link = "|cffa335ee|Hitem:336|h[Helm]|h|r"
+  w.bags[0] = { link }
+  w.slots[link] = "INVTYPE_HEAD"
+  w.upgradeLists[link] = upgrade("A", 0.05)
+  local ns = loadAddon(w)
+  check("pre-lockdown combat reads combat", ns.inCombat() == true)
+  ns.scan()
+  check("no equip before lockdown engages", #w.equipped == 0)
+end
+
+-- 16d. Affecting-combat flipping mid-scan: the equip-time guard must
+-- still refuse, like 16b.
+do
+  local w = newWorld()
+  local link = "|cffa335ee|Hitem:337|h[Helm]|h|r"
+  w.bags[0] = { link }
+  w.slots[link] = "INVTYPE_HEAD"
+  w.upgradeLists[link] = upgrade("A", 0.05)
+  local ns = loadAddon(w)
+  local realEvaluate = ns.evaluate
+  ns.evaluate = function(l)
+    w.affectingCombat = true -- pull lands after the scan entry check
+    return realEvaluate(l)
+  end
+  ns.scan()
+  check("no equip when pull lands mid-scan", #w.equipped == 0)
+end
+
+-- 16e. Missing affecting-combat API fails open (older client): lockdown
+-- alone still guards.
+do
+  local w = newWorld()
+  local ns = loadAddon(w)
+  w.env.UnitAffectingCombat = nil
+  check("no API, no combat: clear", ns.inCombat() == false)
+  w.inCombat = true
+  check("no API, lockdown: combat", ns.inCombat() == true)
 end
 
 -- 17. Pawn missing: the built-in fallback drives, not idle.

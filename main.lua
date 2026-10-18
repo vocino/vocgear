@@ -1097,13 +1097,13 @@ function ns.equip(link, ev, slotID)
     end
     return false
   end
-  -- Lockdown can start after the scan's entry check but before this
-  -- equip lands; the client answers that call with
-  -- ADDON_ACTION_FORBIDDEN, so re-check here and skip instead.
+  -- Pull frames read in-combat on the unit before lockdown engages,
+  -- and the client already forbids the equip in that window, so
+  -- re-check combat here and skip instead.
   -- Combat ends with PLAYER_REGEN_ENABLED (which rescans), but death
   -- and pet battles clear with no retrigger of their own, so those
   -- recheck on a guarded timer.
-  if InCombatLockdown() then return false end
+  if ns.inCombat() then return false end
   if ns.restricted() then ns.retrySoon() return false end
   -- Settle: never displace what WE just equipped. The check slot is the
   -- forced two-slot target, or the single-slot item's home slot; unknown
@@ -1297,8 +1297,23 @@ function ns.clearGuard()
   ns.recentSwap = {}
 end
 
+-- Combat as the client enforces it, not just the UI lockdown: on pull
+-- frames the unit already reads in-combat while InCombatLockdown still
+-- returns false, and the client answers the equip in that window with
+-- ADDON_ACTION_FORBIDDEN. Presence-gated and fail-open like
+-- ns.restricted below. UnitAffectingCombat (UnitDocumentation, live
+-- 12.1.5): unit token in, bool out.
+function ns.inCombat()
+  if InCombatLockdown() then return true end
+  if type(UnitAffectingCombat) == "function" then
+    local ok, fighting = pcall(UnitAffectingCombat, "player")
+    if ok and fighting then return true end
+  end
+  return false
+end
+
 -- Restricted states where the client forbids equipment changes without
--- setting combat lockdown, so the InCombatLockdown check alone is not
+-- setting combat lockdown, so the ns.inCombat check alone is not
 -- enough: dead or ghost (dying drops combat, and PLAYER_REGEN_ENABLED
 -- can fire straight into a forbidden equip), and pet battles (their own
 -- lockdown, invisible to InCombatLockdown). Calling EquipItemByName in
@@ -1361,7 +1376,7 @@ function ns.scanInner()
   -- for a single pass. Otherwise the scan runs on whichever source is
   -- active (Pawn's verdict, or the built-in item-level fallback).
   if ns.pawnPending() then ns.retrySoon() return end
-  if InCombatLockdown() then return end
+  if ns.inCombat() then return end
   -- Death and pet battles clear with no retrigger of their own, so
   -- recheck on a guarded timer instead of waiting for a bag event.
   if ns.restricted() then ns.retrySoon() return end
