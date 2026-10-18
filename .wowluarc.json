@@ -1,0 +1,61 @@
+{
+  "addonRoot": true,
+  "flavors": [
+    "retail",
+    "forever"
+  ],
+  "ignore": [
+    ".reference/**"
+  ],
+  "globals": {
+    "read": [
+      "_G",
+      "C_AddOns",
+      "C_Container",
+      "C_Item",
+      "C_PaperDollInfo",
+      "C_PetBattles",
+      "C_SpecializationInfo",
+      "C_Timer",
+      "C_WeeklyRewards",
+      "CreateFrame",
+      "GameTooltip",
+      "GetInventoryItemLink",
+      "GetTime",
+      "InCombatLockdown",
+      "NUM_BAG_SLOTS",
+      "PaperDollFrame",
+      "Enum",
+      "PlaySound",
+      "SOUNDKIT",
+      "Settings",
+      "MinimalSliderWithSteppersMixin",
+      "UnitAffectingCombat",
+      "UnitClass",
+      "UnitIsDeadOrGhost",
+      "UnitLevel",
+      "CreateSettingsListSectionHeaderInitializer",
+      "SettingsPanel",
+      "hooksecurefunc",
+      "strtrim",
+      "PawnGetAllScalesEx",
+      "PawnGetItemData",
+      "PawnIsArmorBestTypeForPlayer",
+      "PawnIsItemAnItemLevelUpgrade",
+      "PawnIsItemAnUpgrade",
+      "PawnUI_InventoryPawnButton",
+      "PawnUI_InventoryPawnButton_Move",
+      "PawnUnenchantItemLink",
+      "PawnGetBestItemLink"
+    ],
+    "write": [
+      "VocGearDB",
+      "SLASH_VOCGEAR1",
+      "SLASH_VOCGEAR2",
+      "SlashCmdList",
+      "VocGear_CompartmentClick",
+      "VocGear_CompartmentEnter",
+      "VocGear_CompartmentLeave"
+    ]
+  }
+}
