@@ -3,6 +3,7 @@ package-as: VocGear
 ignore:
   - .github
   - .luacheckrc
+  - .wowluarc.json
   - tests
   - AGENTS.md
   - FAMILY.md
