@@ -978,7 +978,7 @@ do
 end
 
 
--- 30. Sheet button sits next to Pawn's button.
+-- 30. Sheet button takes the opposite side from Pawn's button.
 do
   local w = newWorld()
   w.withPaperDoll = true
@@ -986,15 +986,17 @@ do
   local ns = loadAddon(w)
   w.frame.onEvent(nil, "PLAYER_ENTERING_WORLD")
   local pt = ns.sheetButton.point
-  check("right-side Pawn: ours goes left",
-    pt[1] == "TOPRIGHT" and pt[3] == "TOPLEFT" and pt[4] == -2)
+  check("right-side Pawn: ours goes left, under the wrist",
+    pt[1] == "TOPLEFT" and pt[2] == "CharacterWristSlot"
+    and pt[3] == "BOTTOMLEFT" and pt[4] == 1 and pt[5] == -8)
   check("hook installed", w.hooks["PawnUI_InventoryPawnButton_Move"] ~= nil)
   check("matched height", ns.sheetButton.size[2] == 24)
   w.pawnBtn.point = "TOPLEFT" -- user moves Pawn left; hook re-places us
   w.hooks["PawnUI_InventoryPawnButton_Move"]()
   pt = ns.sheetButton.point
-  check("left-side Pawn: ours goes right",
-    pt[1] == "TOPLEFT" and pt[3] == "TOPRIGHT" and pt[4] == 2)
+  check("left-side Pawn: ours goes right, under the trinket",
+    pt[1] == "TOPRIGHT" and pt[2] == "CharacterTrinket1Slot"
+    and pt[3] == "BOTTOMRIGHT" and pt[4] == -1 and pt[5] == -8)
 end
 do
   local w = newWorld()
@@ -1006,7 +1008,7 @@ do
   w.env.PawnUI_InventoryPawnButton_Move = function() end
   w.frame.onEvent(nil, "ADDON_LOADED", "Pawn")
   local pt = ns.sheetButton.point
-  check("late Pawn re-anchors", pt[1] == "TOPRIGHT" and pt[3] == "TOPLEFT")
+  check("late Pawn re-anchors", pt[1] == "TOPLEFT" and pt[2] == "CharacterWristSlot")
   check("late hook installs", w.hooks["PawnUI_InventoryPawnButton_Move"] ~= nil)
 end
 
