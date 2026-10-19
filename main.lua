@@ -1592,8 +1592,10 @@ function ns.equipSoundOptions()
   return container:GetData()
 end
 
--- Sit next to Pawn's sheet button (same template family, matched height),
--- following whichever side Pawn is on. Falls back to the sheet bottom.
+-- Take the opposite side of the sheet from Pawn's button (same template
+-- family, matched height), anchored to the slot frames themselves: Pawn
+-- owns the right side under the trinket, so VocGear takes the left under
+-- the wrist, and vice versa. Falls back to the sheet bottom.
 function ns.placeSheetButton()
   local btn = ns.sheetButton
   if not btn then return end
@@ -1601,9 +1603,11 @@ function ns.placeSheetButton()
   local pawnBtn = _G.PawnUI_InventoryPawnButton
   local point = pawnBtn and pawnBtn:GetPoint()
   if point == "TOPLEFT" then
-    btn:SetPoint("TOPLEFT", pawnBtn, "TOPRIGHT", 2, 0)
+    btn:SetPoint("TOPRIGHT", "CharacterTrinket1Slot", "BOTTOMRIGHT", -1, -8)
   elseif pawnBtn then
-    btn:SetPoint("TOPRIGHT", pawnBtn, "TOPLEFT", -2, 0)
+    -- Pawn on the right, or present but not yet moved off its XML anchor:
+    -- either way the right side is Pawn territory, so take the left.
+    btn:SetPoint("TOPLEFT", "CharacterWristSlot", "BOTTOMLEFT", 1, -8)
   else
     btn:SetPoint("BOTTOM", PaperDollFrame, "BOTTOM", 0, 6)
   end
