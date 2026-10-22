@@ -917,10 +917,17 @@ function ns.vaultSay()
     ns.say("no vault rewards to score (open the Great Vault first)")
     return
   end
-  local top = recs[1]
-  ns.say("vault pick: " .. top.link .. " (" .. ns.vaultVerdict(top) .. ")")
-  for i = 2, #recs do
-    print("  " .. recs[i].link .. " (" .. ns.vaultVerdict(recs[i]) .. ")")
+  for i, pick in ipairs(recs) do
+    local head = (i == 1) and "vault pick: " or "  "
+    local line
+    if pick.ev then
+      line = head .. pick.link .. " (" .. ns.vaultVerdict(pick) .. ")"
+    else
+      -- Placeholder now, patched when GET_ITEM_INFO_RECEIVED lands.
+      ns.notePending(pick.link, "vault")
+      line = head .. pick.link .. " (waiting on item data)"
+    end
+    if i == 1 then ns.say(line) else print(line) end
   end
 end
 
@@ -1199,6 +1206,8 @@ function ns.whySay()
         found = true
         local okEv, ev = pcall(ns.evaluate, link)
         if not okEv or ev == nil then
+          -- Placeholder now, patched when GET_ITEM_INFO_RECEIVED lands.
+          ns.notePending(link, "why")
           ns.say(link .. ": waiting on item data")
         elseif ev.upgrade then
           ns.say(link .. ": upgrade" .. ns.why(ev))
@@ -1210,6 +1219,68 @@ function ns.whySay()
   end
   if not found then ns.say("bags hold no equipment") end
 end
+
+-- Placeholder rows, patched on item data (Plumber's pattern, original
+-- code): the ranked vault picks and the /vg why item list render
+-- immediately, placeholders and all, then patch the rows that were
+-- waiting when GET_ITEM_INFO_RECEIVED lands for them -- instead of
+-- holding the whole list until every item is cached. The scan keeps its
+-- own retry timer; these lists are what the player is actually looking at.
+-- itemID -> { { link = link, kind = "vault" | "why" } }.
+ns.pendingInfo = {}
+
+-- Queue a placeholder row for patching. Links with no itemID yet cannot
+-- be matched to a later event, so they stay placeholders.
+function ns.notePending(link, kind)
+  local itemID = ns.baseItemID(link)
+  if type(itemID) ~= "number" then return end
+  local waiting = ns.pendingInfo[itemID]
+  if not waiting then
+    waiting = {}
+    ns.pendingInfo[itemID] = waiting
+  end
+  for _, entry in ipairs(waiting) do
+    if entry.link == link then return end
+  end
+  waiting[#waiting + 1] = { link = link, kind = kind }
+end
+
+-- Item data landed for itemID: re-evaluate every placeholder row waiting
+-- on it and print the settled line (the patch). Rows still unsure stay
+-- queued for the next event. A failed lookup (success == false) drops its
+-- rows, since no more data is coming for them. Patch lines always print:
+-- they finish an answer the player already asked for.
+function ns.patchPending(itemID, success)
+  if type(itemID) ~= "number" then return end
+  local waiting = ns.pendingInfo[itemID]
+  if not waiting then return end
+  ns.pendingInfo[itemID] = nil
+  if success == false then return end
+  for _, entry in ipairs(waiting) do
+    local okEv, ev = pcall(ns.evaluate, entry.link)
+    if okEv and ev ~= nil then
+      ns.patchLine(entry.kind, entry.link, ev)
+    else
+      ns.notePending(entry.link, entry.kind)
+    end
+  end
+end
+
+-- The settled line for a patched row, in the same shape as the list that
+-- printed its placeholder.
+function ns.patchLine(kind, link, ev)
+  if kind == "vault" then
+    local ctx = ns.setContext()
+    local pick = { link = link, ev = ev, tierProgress = ns.tierProgress(ctx, link),
+      tierSet = ns.setID(link) }
+    ns.say("vault update: " .. link .. " (" .. ns.vaultVerdict(pick) .. ")")
+  elseif ev.upgrade then
+    ns.say(link .. ": upgrade" .. ns.why(ev))
+  else
+    ns.say(link .. ": not equipping (" .. ns.whyNot(link, ev) .. ")")
+  end
+end
+
 ns.flagged = {} -- links announced as not-auto-equipped, per session
 ns.scanning = false
 
@@ -1297,6 +1368,49 @@ function ns.clearGuard()
   ns.recentSwap = {}
 end
 
+-- Rival auto-equippers: addons that change equipped gear on their own
+-- (outfit and gear-set swappers). Two writers ping-pong over slots, so
+-- when one is loaded VocGear warns once and stands down instead of
+-- fighting it. Never touch the rival: no disabling it, no writing its
+-- settings, no counter-equips. Session-only: a fresh login re-detects.
+-- An explicit /vg on resumes anyway (the player's choice wins).
+ns.RIVALS = {
+  Outfitter = "outfit swaps",
+  ItemRack = "gear-set swaps",
+}
+ns.rivalWarned = {} -- rival name -> true, warned once per session
+ns.rivalStoodDown = false -- a loaded rival stood us down this session
+
+-- True when the named addon is loaded right now. Same guarded C_AddOns
+-- read as ns.pawnPending above.
+function ns.addonLoaded(addonName)
+  if type(C_AddOns) ~= "table" then return false end
+  if type(C_AddOns.IsAddOnLoaded) ~= "function" then return false end
+  local ok, loaded = pcall(C_AddOns.IsAddOnLoaded, addonName)
+  return ok and loaded == true
+end
+
+-- Warn once per rival and stand down. Unknown names and repeat sightings
+-- stay silent: detection never nags.
+function ns.checkRival(addonName)
+  if type(addonName) ~= "string" then return end
+  local reason = ns.RIVALS[addonName]
+  if not reason then return end
+  if ns.rivalWarned[addonName] then return end
+  ns.rivalWarned[addonName] = true
+  ns.rivalStoodDown = true
+  ns.say("standing down: " .. addonName .. " is loaded and also changes gear ("
+    .. reason .. "), so our equips would fight it (/vg on resumes anyway)")
+end
+
+-- Rivals already loaded before us (a fresh login, or /reload with the
+-- rival already up): ADDON_LOADED only fires for later loads.
+function ns.checkRivalsLoaded()
+  for rivalName in pairs(ns.RIVALS) do
+    if ns.addonLoaded(rivalName) then ns.checkRival(rivalName) end
+  end
+end
+
 -- Combat as the client enforces it, not just the UI lockdown: on pull
 -- frames the unit already reads in-combat while InCombatLockdown still
 -- returns false, and the client answers the equip in that window with
@@ -1372,6 +1486,9 @@ function ns.scanInner()
   if ns.scanning then return end
   local o = ns.opts()
   if not o.enabled then return end
+  -- A loaded rival stood us down: warn once at detection, equip nothing
+  -- until an explicit /vg on (see ns.checkRival).
+  if ns.rivalStoodDown then return end
   -- Pawn installed but still loading: wait for it rather than falling back
   -- for a single pass. Otherwise the scan runs on whichever source is
   -- active (Pawn's verdict, or the built-in item-level fallback).
@@ -1685,12 +1802,20 @@ ns.frame:RegisterEvent("BAG_UPDATE_DELAYED")
 ns.frame:RegisterEvent("PLAYER_ENTERING_WORLD")
 ns.frame:RegisterEvent("PLAYER_REGEN_ENABLED")
 ns.frame:RegisterEvent("WEEKLY_REWARDS_UPDATE")
-ns.frame:SetScript("OnEvent", function(_, event, arg1)
+-- Item data for placeholder rows (see ns.pendingInfo).
+ns.frame:RegisterEvent("GET_ITEM_INFO_RECEIVED")
+ns.frame:SetScript("OnEvent", function(_, event, arg1, arg2)
   if event == "WEEKLY_REWARDS_UPDATE" then
     ns.maybeVaultRecommend()
     return
   end
+  if event == "GET_ITEM_INFO_RECEIVED" then
+    ns.patchPending(arg1, arg2)
+    return
+  end
   if event == "ADDON_LOADED" then
+    -- A rival loading now stands us down; see ns.checkRival.
+    ns.checkRival(arg1)
     -- The client replaces the SavedVariables global with the loaded table
     -- after our file ran, so rebind or settings never persist.
     if arg1 == name then
@@ -1699,6 +1824,7 @@ ns.frame:SetScript("OnEvent", function(_, event, arg1)
       if type(VocGearDB) ~= "table" then VocGearDB = {} end
       ns.db = VocGearDB
       ns.ensureSettings()
+      ns.checkRivalsLoaded() -- rivals already up before us
     end
     -- Cheap and idempotent, so run on every load: covers Pawn's button
     -- appearing late and the lazy Blizzard character UI creating
@@ -1708,6 +1834,7 @@ ns.frame:SetScript("OnEvent", function(_, event, arg1)
   elseif event == "PLAYER_ENTERING_WORLD" then
     ns.ensureSettings() -- in case Settings wasn't up at ADDON_LOADED
     ns.ensureSourceNote() -- all addons loaded: the source reading is final
+    ns.checkRivalsLoaded() -- all addons are loaded here
     ns.ensurePaperDollButton()
   end
   ns.scan()
@@ -1739,7 +1866,9 @@ function ns.setEnabled(on)
   o.enabled = on
   ns.play(on and "on" or "off")
   ns.say("auto-equip " .. (on and "on" or "off"))
-  if on then ns.clearGuard() ns.scan() end
+  -- An explicit enable overrides a rival stand-down: the player's choice
+  -- wins over our deference to the rival.
+  if on then ns.rivalStoodDown = false ns.clearGuard() ns.scan() end
 end
 
 -- Blizzard's slash dispatcher reads SLASH_* globals by name, so these
