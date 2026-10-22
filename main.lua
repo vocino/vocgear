@@ -57,6 +57,7 @@ local defaults = {
   swapWeapons = true,
   scale = "",
   sheetButton = true,
+  sessionIlvl = true,
   equipSound = "878", -- "0" = off; others are SOUNDKIT IDs, see ns.EQUIP_SOUNDS
 }
 ns.defaults = defaults
@@ -1656,6 +1657,9 @@ function ns.ensureSettings()
       "Sound played when VocGear equips an upgrade. Changing it previews the sound.")
     ns.onSettingChanged(s, ns.playEquipSound)
   end
+  check("sessionIlvl", "Session item-level gain",
+    "Show the session's item-level gain on the character sheet's Item Level readout.",
+    function() ns.refreshIlvlSuffix() end)
   check("sheetButton", "Character sheet button",
     "Show a Check Bags button on the character sheet.",
     function() ns.ensurePaperDollButton() end)
@@ -1709,6 +1713,129 @@ function ns.equipSoundOptions()
   return container:GetData()
 end
 
+-- Session item-level gain on the character sheet (mechanism verified in
+-- Blizzard_UIPanels_Game PaperDollFrame.lua, live and Forever/Camelot):
+-- PaperDollFrame_SetItemLevel(statFrame, unit) writes the Item Level
+-- row's Value text plus statFrame.tooltip/tooltip2, and
+-- PaperDollStatTooltip shows them on hover. A post-hook re-applies our
+-- suffix every time Blizzard rebuilds the row, so there are no new
+-- frames and no extra events: opening the sheet refreshes it.
+ns.sessionStartIlvl = nil -- display ilvl at login, floored like Blizzard
+ns.ilvlHooked = false
+ns.ilvlFrame = nil -- last player item-level stat frame seen
+
+-- Blizzard's own display math: floor(max(minItemLevel, avgEquipped)).
+-- Nil when the API is missing or has no data yet.
+function ns.displayIlvl()
+  if type(GetAverageItemLevel) ~= "function" then return nil end
+  local ok, _, equipped = pcall(GetAverageItemLevel)
+  if not ok or type(equipped) ~= "number" then return nil end
+  local minIlvl = 0
+  if type(C_PaperDollInfo) == "table" and type(C_PaperDollInfo.GetMinItemLevel) == "function" then
+    local okMin, m = pcall(C_PaperDollInfo.GetMinItemLevel)
+    if okMin and type(m) == "number" then minIlvl = m end
+  end
+  return math.floor(math.max(minIlvl, equipped))
+end
+
+-- Inline color code built from the palette: the no-hardcoded-colors
+-- check forbids |cff literals, so the code is assembled, never written.
+function ns.colorCode(rgb)
+  if type(rgb) ~= "table" then rgb = COLORS.text end
+  local function byte(v)
+    if type(v) ~= "number" then v = 1 end
+    return math.floor(v * 255 + 0.5)
+  end
+  return string.format("|cff%02x%02x%02x", byte(rgb[1]), byte(rgb[2]), byte(rgb[3]))
+end
+
+-- Login baseline. When item data is not cached yet the API reports
+-- nothing useful, so the baseline stays unknown and the first positive
+-- reading (login or first sheet open) becomes the start instead.
+function ns.captureSessionStart()
+  if ns.sessionStartIlvl ~= nil then return end
+  local cur = ns.displayIlvl()
+  if cur ~= nil and cur > 0 then ns.sessionStartIlvl = cur end
+end
+
+-- Post-hook for PaperDollFrame_SetItemLevel: Blizzard just rebuilt the
+-- row, so re-apply the suffix onto the fresh text (idempotent: the base
+-- text and tooltip are Blizzard's own each call). Anything but the
+-- player stays exactly as Blizzard wrote it.
+function ns.onItemLevelSet(statFrame, unit)
+  if unit ~= "player" then return end
+  if type(statFrame) ~= "table" then return end
+  ns.ilvlFrame = statFrame
+  if not ns.opts().sessionIlvl then return end
+  local cur = ns.displayIlvl()
+  if cur == nil then return end
+  if cur > 0 and ns.sessionStartIlvl == nil then ns.sessionStartIlvl = cur end
+  local start = ns.sessionStartIlvl
+  if start == nil then return end
+  local delta = cur - start
+  if delta == 0 then return end
+  local gain
+  if delta > 0 then
+    gain = ns.colorCode(COLORS.green) .. "(+" .. delta .. ")|r"
+  else
+    gain = "(" .. delta .. ")" -- a loss reads plain, never alarming red
+  end
+  local value = statFrame.Value
+  if type(value) == "table" and type(value.SetText) == "function" then
+    value:SetText(tostring(cur) .. " " .. gain)
+  end
+  if type(statFrame.tooltip2) == "string" then
+    statFrame.tooltip2 = statFrame.tooltip2 .. "\n\nSession: " .. start .. " to " .. cur .. " " .. gain
+  end
+end
+
+-- Late character UI: the sheet (and its SetItemLevel) may not exist at
+-- our load, so hook on every pass until it sticks. Cheap and idempotent.
+function ns.hookItemLevel()
+  if ns.ilvlHooked then return end
+  if type(hooksecurefunc) ~= "function" then return end
+  if type(PaperDollFrame_SetItemLevel) ~= "function" then return end
+  hooksecurefunc("PaperDollFrame_SetItemLevel", ns.onItemLevelSet)
+  ns.ilvlHooked = true
+end
+
+-- The toggle applies at once to a rendered row; the tooltip line
+-- rebuilds itself on Blizzard's next stats update.
+function ns.refreshIlvlSuffix()
+  local f = ns.ilvlFrame
+  if type(f) ~= "table" then return end
+  if ns.opts().sessionIlvl then
+    ns.onItemLevelSet(f, "player")
+  else
+    local cur = ns.displayIlvl()
+    local value = f.Value
+    if cur ~= nil and type(value) == "table" and type(value.SetText) == "function" then
+      value:SetText(tostring(cur))
+    end
+  end
+end
+
+-- Chat mirror of the readout: current, session delta, start.
+function ns.ilvlSay()
+  local cur = ns.displayIlvl()
+  if cur == nil then
+    ns.say("item level unavailable")
+    return
+  end
+  if cur > 0 and ns.sessionStartIlvl == nil then ns.sessionStartIlvl = cur end
+  local start = ns.sessionStartIlvl
+  if start == nil then
+    ns.say("ilvl " .. cur)
+    return
+  end
+  local delta = cur - start
+  if delta == 0 then
+    ns.say("ilvl " .. cur .. " (unchanged since login)")
+    return
+  end
+  ns.say("ilvl " .. cur .. " (session " .. (delta > 0 and "+" or "") .. delta .. " from " .. start .. ")")
+end
+
 -- Take the opposite side of the sheet from Pawn's button (same template
 -- family, matched height), anchored to the slot frames themselves: Pawn
 -- owns the right side under the trinket, so VocGear takes the left under
@@ -1739,6 +1866,7 @@ end
 
 ns.sheetButton = nil
 function ns.ensurePaperDollButton()
+  ns.hookItemLevel() -- the sheet (and its SetItemLevel) loads lazily
   local o = ns.opts()
   if ns.sheetButton then
     ns.sheetButton:SetShown(o.sheetButton ~= false)
@@ -1835,6 +1963,7 @@ ns.frame:SetScript("OnEvent", function(_, event, arg1, arg2)
     ns.ensureSettings() -- in case Settings wasn't up at ADDON_LOADED
     ns.ensureSourceNote() -- all addons loaded: the source reading is final
     ns.checkRivalsLoaded() -- all addons are loaded here
+    ns.captureSessionStart() -- login baseline for the session gain readout
     ns.ensurePaperDollButton()
   end
   ns.scan()
@@ -1849,6 +1978,7 @@ ns.HELP = {
   "/vg scan       check bags now",
   "/vg why        explain every bag item",
   "/vg vault      recommend a Great Vault pick",
+  "/vg ilvl        show session item-level gain",
   "/vg announce   toggle chat announcements",
   "/vg config     open Settings > AddOns > VocGear",
   "/vg help       this list (/vocgear works too)",
@@ -1892,6 +2022,8 @@ SlashCmdList.VOCGEAR = function(msg)
     ns.checkNow()
   elseif msg == "vault" then
     ns.vaultSay()
+  elseif msg == "ilvl" then
+    ns.ilvlSay()
   elseif msg == "why" then
     ns.whySay()
   else
