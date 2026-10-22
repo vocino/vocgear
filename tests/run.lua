@@ -3771,4 +3771,30 @@ do
   check("suffix stripped", f.get() == "642")
 end
 
+-- 123. level-up rescans: newly usable gear equips with no bag event.
+do
+  local w = newWorld()
+  local link = "|cffa335ee|Hitem:12301|h[Helm]|h|r"
+  w.bags[0] = { link }
+  w.slots[link] = "INVTYPE_HEAD"
+  w.upgradeLists[link] = upgrade("A", 0.05)
+  loadAddon(w)
+  check("level-up listened", w.frame.events["PLAYER_LEVEL_UP"] == true)
+  w.frame.onEvent(nil, "PLAYER_LEVEL_UP", 80)
+  check("level-up rescans", #w.equipped == 1)
+end
+
+-- 124. spec change rescans: Pawn's verdict may differ per spec.
+do
+  local w = newWorld()
+  local link = "|cffa335ee|Hitem:12401|h[Helm]|h|r"
+  w.bags[0] = { link }
+  w.slots[link] = "INVTYPE_HEAD"
+  w.upgradeLists[link] = upgrade("A", 0.05)
+  loadAddon(w)
+  check("spec change listened", w.frame.events["PLAYER_SPECIALIZATION_CHANGED"] == true)
+  w.frame.onEvent(nil, "PLAYER_SPECIALIZATION_CHANGED")
+  check("spec change rescans", #w.equipped == 1)
+end
+
 print("tests/run.lua: " .. passed .. " checks passed")
