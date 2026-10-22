@@ -3481,4 +3481,138 @@ do -- missing paperdoll API falls back to the main hand (16)
   ns.scan()
   check("no paperdoll API: bow still equips at 16", #w.equipped == 1 and w.equippedSlots[16] == candbow)
 end
+-- 108. whySay renders placeholders immediately and patches on item data.
+do
+  local w = newWorld()
+  w.pawn = false
+  local link = "|cff1eff00|Hitem:10801|h[Uncached Helm]|h|r"
+  w.bags[0] = { link }
+  w.slots[link] = "INVTYPE_HEAD"
+  w.itemIDs[link] = 10801
+  w.classIDs[link], w.subclassIDs[link] = 4, 4 -- plate
+  w.levels[link] = nil -- uncached: no verdict yet
+  local ns = loadAddon(w)
+  ns.whySay()
+  check("why placeholder printed", #w.printed == 1
+    and w.printed[1]:find("waiting on item data", 1, true) ~= nil)
+  w.levels[link] = 50 -- data lands
+  w.frame.onEvent(nil, "GET_ITEM_INFO_RECEIVED", 10801, true)
+  check("why patch printed", #w.printed == 2
+    and w.printed[2]:find(": upgrade", 1, true) ~= nil)
+end
+
+-- 109. vaultSay lists unscored picks as placeholders, then patches.
+do
+  local w = newWorld()
+  w.pawn = false
+  local helm = "|cffa335ee|Hitem:10901|h[Vault Helm]|h|r"
+  w.vaultActivities = { { rewards = { { type = 1, itemDBID = 701 } } } }
+  w.vaultLinks[701] = helm
+  w.slots[helm] = "INVTYPE_HEAD"
+  w.itemIDs[helm] = 10901
+  w.classIDs[helm], w.subclassIDs[helm] = 4, 4 -- plate
+  w.levels[helm] = nil -- uncached
+  local ns = loadAddon(w)
+  ns.vaultSay()
+  check("vault placeholder printed", #w.printed == 1
+    and w.printed[1]:find("waiting on item data", 1, true) ~= nil)
+  w.levels[helm] = 60 -- data lands
+  w.frame.onEvent(nil, "GET_ITEM_INFO_RECEIVED", 10901, true)
+  check("vault patch printed", #w.printed == 2
+    and w.printed[2]:find("vault update:", 1, true) ~= nil)
+end
+
+-- 110. Item data for another item leaves placeholders alone.
+do
+  local w = newWorld()
+  w.pawn = false
+  local helm = "|cff1eff00|Hitem:11001|h[Vault Helm]|h|r"
+  w.vaultActivities = { { rewards = { { type = 1, itemDBID = 801 } } } }
+  w.vaultLinks[801] = helm
+  w.slots[helm] = "INVTYPE_HEAD"
+  w.itemIDs[helm] = 11001
+  w.classIDs[helm], w.subclassIDs[helm] = 4, 4 -- plate
+  w.levels[helm] = nil -- uncached
+  local ns = loadAddon(w)
+  ns.vaultSay()
+  w.frame.onEvent(nil, "GET_ITEM_INFO_RECEIVED", 99999, true)
+  check("other item event patches nothing", #w.printed == 1)
+  w.levels[helm] = 50 -- this item's data lands
+  w.frame.onEvent(nil, "GET_ITEM_INFO_RECEIVED", 11001, true)
+  check("matching event still patches", #w.printed == 2
+    and w.printed[2]:find("vault update:", 1, true) ~= nil)
+end
+
+-- 111. A failed item-data lookup drops the placeholder silently.
+do
+  local w = newWorld()
+  w.pawn = false
+  local helm = "|cff1eff00|Hitem:11101|h[Vault Helm]|h|r"
+  w.vaultActivities = { { rewards = { { type = 1, itemDBID = 901 } } } }
+  w.vaultLinks[901] = helm
+  w.slots[helm] = "INVTYPE_HEAD"
+  w.itemIDs[helm] = 11101
+  w.classIDs[helm], w.subclassIDs[helm] = 4, 4 -- plate
+  w.levels[helm] = nil -- uncached
+  local ns = loadAddon(w)
+  ns.vaultSay()
+  w.frame.onEvent(nil, "GET_ITEM_INFO_RECEIVED", 11101, false)
+  check("failed lookup prints nothing", #w.printed == 1)
+  w.levels[helm] = 50 -- too late: the row was dropped
+  w.frame.onEvent(nil, "GET_ITEM_INFO_RECEIVED", 11101, true)
+  check("dropped placeholder never patches", #w.printed == 1)
+end
+
+-- 112. A loaded rival warns once and stands VocGear down; /vg on resumes.
+do
+  local w = newWorld()
+  w.loadedAddons = { Outfitter = true }
+  local link = "|cffa335ee|Hitem:11201|h[Helm]|h|r"
+  w.bags[0] = { link }
+  w.slots[link] = "INVTYPE_HEAD"
+  w.upgradeLists[link] = upgrade("A", 0.05)
+  local ns = loadAddon(w)
+  clientLoaded(w) -- ADDON_LOADED VocGear: rival already up
+  check("rival warned", #w.printed == 1
+    and w.printed[1]:find("Outfitter", 1, true) ~= nil
+    and w.printed[1]:find("/vg on", 1, true) ~= nil)
+  check("stood down", ns.rivalStoodDown == true)
+  ns.scan()
+  check("stood down: nothing equipped", #w.equipped == 0)
+  w.env.SlashCmdList.VOCGEAR("on") -- explicit enable resumes anyway
+  check("re-enable clears stand-down", ns.rivalStoodDown == false)
+  check("re-enable equips", #w.equipped == 1)
+end
+
+-- 113. Rivals loading later stand VocGear down; strangers do not.
+do
+  local w = newWorld()
+  local link1 = "|cffa335ee|Hitem:11301|h[Helm One]|h|r"
+  local link2 = "|cffa335ee|Hitem:11302|h[Helm Two]|h|r"
+  w.bags[0] = { link1, link2 }
+  w.slots[link1] = "INVTYPE_HEAD"
+  w.slots[link2] = "INVTYPE_HEAD"
+  w.upgradeLists[link1] = upgrade("A", 0.05)
+  w.upgradeLists[link2] = upgrade("A", 0.05)
+  local ns = loadAddon(w)
+  ns.scan() -- one equip per pass
+  check("no rival: equips", #w.equipped == 1)
+  w.frame.onEvent(nil, "ADDON_LOADED", "ItemRack")
+  check("late rival stands down", ns.rivalStoodDown == true)
+  ns.scan()
+  check("stood down: second item waits", #w.equipped == 1)
+  local warned = 0
+  for _, line in ipairs(w.printed) do
+    if line:find("ItemRack", 1, true) then warned = warned + 1 end
+  end
+  w.frame.onEvent(nil, "ADDON_LOADED", "ItemRack") -- repeat: silent
+  w.frame.onEvent(nil, "ADDON_LOADED", "SomeStranger") -- not a rival
+  warned = 0
+  for _, line in ipairs(w.printed) do
+    if line:find("ItemRack", 1, true) then warned = warned + 1 end
+  end
+  check("rival warned once", warned == 1)
+  check("stranger changes nothing", ns.rivalStoodDown == true and #w.equipped == 1)
+end
+
 print("tests/run.lua: " .. passed .. " checks passed")
