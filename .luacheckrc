@@ -26,8 +26,8 @@ read_globals = {
   "_G",
   "C_AddOns", "C_Container", "C_Item", "C_PaperDollInfo", "C_PetBattles", "C_SpecializationInfo", "C_Timer",
   "C_WeeklyRewards",
-  "CreateFrame", "GameTooltip", "GetInventoryItemLink",
-  "GetTime", "InCombatLockdown", "NUM_BAG_SLOTS", "PaperDollFrame",
+  "CreateFrame", "GameTooltip", "GetAverageItemLevel", "GetInventoryItemLink",
+  "GetTime", "InCombatLockdown", "NUM_BAG_SLOTS", "PaperDollFrame", "PaperDollFrame_SetItemLevel",
   "Enum",
   "PlaySound", "SOUNDKIT", -- presence-gated; ns.play falls back to numeric IDs
   "Settings", "MinimalSliderWithSteppersMixin", "UnitAffectingCombat", "UnitClass", "UnitIsDeadOrGhost", "UnitLevel",

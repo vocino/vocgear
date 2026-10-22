@@ -106,7 +106,15 @@ local function loadAddon(world)
   }
   g.C_PaperDollInfo = {
     GetInventorySlotInfo = function(_) return world.rangedSlot end,
+    GetMinItemLevel = function() return world.minIlvl or 0 end,
   }
+  if not world.noAvgApi then
+    g.GetAverageItemLevel = function()
+      local a = world.avgIlvl
+      if a == nil then return nil end
+      return a[1], a[2], a[3]
+    end
+  end
   g.Enum = { CachedRewardType = { Item = 1, Currency = 2 } }
   g.C_WeeklyRewards = {
     GetActivities = function() return world.vaultActivities end,
@@ -245,6 +253,7 @@ local function newWorld()
            setIDs = {}, itemIDs = {}, setBonusSpells = {}, setNames = {},
            specIndex = nil, specID = nil, lastBonusSpec = nil,
            ilvlDiffs = {}, scales = {}, savedVars = nil, playerLevel = 80,
+           avgIlvl = nil, minIlvl = 0, noAvgApi = false,
            withSettings = false, settingsReg = {}, settingsChecks = 0,
            settingsSliders = 0, settingsDropdowns = {}, settingCallbacks = {},
            frames = {}, gametip = { lines = {} }, withPaperDoll = false,
@@ -628,7 +637,7 @@ do
 end
 
 
--- 19. Settings panel registers all ten options.
+-- 19. Settings panel registers all twelve options.
 do
   local w = newWorld()
   w.withSettings = true
@@ -643,10 +652,10 @@ do
   local keys = {}
   for _, r in ipairs(w.settingsReg) do keys[r.key] = r end
   for _, k in ipairs({ "enabled", "announce", "audit", "minUpgradePct",
-      "autoTwoSlot", "includeIlvl", "keepHeirlooms", "protectSets", "swapWeapons", "scale", "sheetButton" }) do
+      "autoTwoSlot", "includeIlvl", "keepHeirlooms", "protectSets", "swapWeapons", "scale", "sessionIlvl", "sheetButton" }) do
     check("setting registered: " .. k, keys[k] ~= nil)
   end
-  check("nine checkboxes", w.settingsChecks == 9)
+  check("ten checkboxes", w.settingsChecks == 10)
   check("one slider", w.settingsSliders == 1)
   check("slider range", w.sliderOpts.min == 0 and w.sliderOpts.max == 25
     and w.sliderOpts.step == 5)
@@ -662,7 +671,7 @@ do
     for _, r in ipairs(w.settingsReg) do
       if not w.settingCallbacks[r.var] then return false end
     end
-    return #w.settingsReg == 12
+    return #w.settingsReg == 13
   end)())
   local clink = "|cffa335ee|Hitem:710|h[Helm]|h|r"
   w.bags[0] = { clink }
@@ -3613,6 +3622,153 @@ do
   end
   check("rival warned once", warned == 1)
   check("stranger changes nothing", ns.rivalStoodDown == true and #w.equipped == 1)
+end
+
+-- 114. login captures the session start, floored like Blizzard's readout.
+do
+  local w = newWorld()
+  w.pawn = false
+  w.avgIlvl = { 640.7, 639.2, 639.2 }
+  local ns = loadAddon(w)
+  w.frame.onEvent(nil, "PLAYER_ENTERING_WORLD")
+  check("session start captured", ns.sessionStartIlvl == 639)
+end
+
+-- Session-ilvl helpers: a fake item-level stat frame, and installing the
+-- hook by letting the lazy character UI "load" after the API exists.
+local function ilvlFrame(text)
+  local t = text or "639"
+  local f = { tooltip = "Item Level 639", tooltip2 = "body" }
+  f.Value = {
+    SetText = function(_, v) t = v end,
+    GetText = function() return t end,
+  }
+  f.get = function() return t end
+  return f
+end
+
+local function hookItemLevel(w)
+  w.env.PaperDollFrame_SetItemLevel = function() end
+  w.frame.onEvent(nil, "ADDON_LOADED", "Blizzard_UIPanels_Game")
+  return w.hooks["PaperDollFrame_SetItemLevel"]
+end
+
+-- 115. a gain appends a green suffix and a session tooltip line.
+do
+  local w = newWorld()
+  w.pawn = false
+  w.avgIlvl = { 640.7, 639.2, 639.2 }
+  local ns = loadAddon(w)
+  w.frame.onEvent(nil, "PLAYER_ENTERING_WORLD")
+  local hook = hookItemLevel(w)
+  check("item level hooked", type(hook) == "function")
+  w.avgIlvl = { 643.4, 642.6, 642.6 }
+  local f = ilvlFrame()
+  hook(f, "player")
+  check("gain suffix", f.get() == "642 " .. ns.colorCode(ns.COLORS.green) .. "(+3)|r")
+  check("session tooltip", f.tooltip2:find("Session: 639 to 642 " .. ns.colorCode(ns.COLORS.green) .. "(+3)|r", 1, true) ~= nil)
+end
+
+-- 116. no change since login leaves the readout exactly as Blizzard wrote it.
+do
+  local w = newWorld()
+  w.pawn = false
+  w.avgIlvl = { 640.7, 639.2, 639.2 }
+  loadAddon(w)
+  w.frame.onEvent(nil, "PLAYER_ENTERING_WORLD")
+  local hook = hookItemLevel(w)
+  local f = ilvlFrame()
+  hook(f, "player")
+  check("no change: text untouched", f.get() == "639")
+  check("no change: tooltip untouched", f.tooltip2 == "body")
+end
+
+-- 117. the toggle silences the suffix and the tooltip line.
+do
+  local w = newWorld()
+  w.pawn = false
+  w.avgIlvl = { 640.7, 639.2, 639.2 }
+  local ns = loadAddon(w)
+  w.frame.onEvent(nil, "PLAYER_ENTERING_WORLD")
+  ns.opts().sessionIlvl = false
+  local hook = hookItemLevel(w)
+  w.avgIlvl = { 643.4, 642.6, 642.6 }
+  local f = ilvlFrame()
+  hook(f, "player")
+  check("toggled off: no suffix", f.get() == "639")
+  check("toggled off: no tooltip line", f.tooltip2 == "body")
+end
+
+-- 118. inspecting another unit never touches the readout.
+do
+  local w = newWorld()
+  w.pawn = false
+  w.avgIlvl = { 640.7, 639.2, 639.2 }
+  local ns = loadAddon(w)
+  w.frame.onEvent(nil, "PLAYER_ENTERING_WORLD")
+  local hook = hookItemLevel(w)
+  local f = ilvlFrame()
+  hook(f, "target")
+  check("other unit: untouched", f.get() == "639" and f.tooltip2 == "body")
+  check("other unit: no frame kept", ns.ilvlFrame == nil)
+end
+
+-- 119. /vg ilvl announces start, current, and delta.
+do
+  local w = newWorld()
+  w.pawn = false
+  w.avgIlvl = { 640.7, 639.2, 639.2 }
+  loadAddon(w)
+  w.frame.onEvent(nil, "PLAYER_ENTERING_WORLD")
+  w.avgIlvl = { 643.4, 642.6, 642.6 }
+  w.env.SlashCmdList.VOCGEAR("ilvl")
+  check("ilvl readout", w.printed[#w.printed]:find("ilvl 642 (session +3 from 639)", 1, true) ~= nil)
+end
+
+-- 120. a missing average-level API stays silent: no start, no suffix.
+do
+  local w = newWorld()
+  w.pawn = false
+  w.noAvgApi = true
+  local ns = loadAddon(w)
+  w.frame.onEvent(nil, "PLAYER_ENTERING_WORLD")
+  check("no api: no start", ns.sessionStartIlvl == nil)
+  local hook = hookItemLevel(w)
+  local f = ilvlFrame()
+  hook(f, "player")
+  check("no api: untouched", f.get() == "639" and f.tooltip2 == "body")
+end
+
+-- 121. a loss shows a plain (uncolored) negative delta.
+do
+  local w = newWorld()
+  w.pawn = false
+  w.avgIlvl = { 645.2, 645.0, 645.0 }
+  loadAddon(w)
+  w.frame.onEvent(nil, "PLAYER_ENTERING_WORLD")
+  local hook = hookItemLevel(w)
+  w.avgIlvl = { 643.4, 642.6, 642.6 }
+  local f = ilvlFrame("645")
+  hook(f, "player")
+  check("loss suffix", f.get() == "642 (-3)")
+  check("loss tooltip", f.tooltip2:find("Session: 645 to 642 (-3)", 1, true) ~= nil)
+end
+
+-- 122. turning the toggle off strips a rendered suffix at once.
+do
+  local w = newWorld()
+  w.pawn = false
+  w.avgIlvl = { 640.7, 639.2, 639.2 }
+  local ns = loadAddon(w)
+  w.frame.onEvent(nil, "PLAYER_ENTERING_WORLD")
+  local hook = hookItemLevel(w)
+  w.avgIlvl = { 643.4, 642.6, 642.6 }
+  local f = ilvlFrame()
+  hook(f, "player")
+  check("suffix rendered", f.get():find("(+3)", 1, true) ~= nil)
+  ns.opts().sessionIlvl = false
+  ns.refreshIlvlSuffix()
+  check("suffix stripped", f.get() == "642")
 end
 
 print("tests/run.lua: " .. passed .. " checks passed")
