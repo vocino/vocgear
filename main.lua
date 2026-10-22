@@ -1929,6 +1929,10 @@ ns.frame:RegisterEvent("ADDON_LOADED")
 ns.frame:RegisterEvent("BAG_UPDATE_DELAYED")
 ns.frame:RegisterEvent("PLAYER_ENTERING_WORLD")
 ns.frame:RegisterEvent("PLAYER_REGEN_ENABLED")
+-- Level-ups unlock level-gated gear and spec changes re-point Pawn's
+-- verdict, both with no bag event, so both rescan (see the fallthrough).
+ns.frame:RegisterEvent("PLAYER_LEVEL_UP")
+ns.frame:RegisterEvent("PLAYER_SPECIALIZATION_CHANGED")
 ns.frame:RegisterEvent("WEEKLY_REWARDS_UPDATE")
 -- Item data for placeholder rows (see ns.pendingInfo).
 ns.frame:RegisterEvent("GET_ITEM_INFO_RECEIVED")
