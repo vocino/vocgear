@@ -3797,4 +3797,45 @@ do
   check("spec change rescans", #w.equipped == 1)
 end
 
+-- 125. Builtin path with no cached equip slot reads as unsure, never "not an upgrade".
+do
+  local w = newWorld()
+  w.pawn = false
+  local link = "|cffa335ee|Hitem:12501|h[Vault Helm]|h|r"
+  w.slots[link] = nil -- GetItemInfoInstant has no equip loc yet: uncached
+  local ns = loadAddon(w)
+  check("uncached builtin reads unsure", ns.evaluateBuiltin(link) == nil)
+end
+
+-- 126. A nameless vault link never prints as "[] (not an upgrade)": it lists
+-- as waiting, then patches to the named pick when item data lands.
+do
+  local w = newWorld()
+  w.pawn = false
+  w.playerClass = "WARLOCK"
+  local nameless = "|cffa335ee|Hitem:12601|h[]|h|r"
+  local named = "|cffa335ee|Hitem:12601|h[Vault Helm]|h|r"
+  w.vaultActivities = { { rewards = { { type = 1, itemDBID = 701 } } } }
+  w.vaultLinks[701] = nameless
+  w.itemIDs[nameless] = 12601
+  w.slots[nameless] = "INVTYPE_HEAD"
+  w.classIDs[nameless], w.subclassIDs[nameless] = 4, 1 -- cloth armor
+  w.levels[nameless] = 600 -- scorable, but the name is not cached yet
+  local ns = loadAddon(w)
+  ns.vaultSay()
+  check("nameless vault waits, never verdicts", #w.printed == 1
+    and w.printed[1]:find("waiting on item data", 1, true) ~= nil)
+  check("nameless vault lists the item, not []", w.printed[1]:find("item:12601", 1, true) ~= nil
+    and w.printed[1]:find("[]", 1, true) == nil)
+  w.vaultLinks[701] = named -- item data lands: the vault now names the pick
+  w.itemIDs[named] = 12601
+  w.slots[named] = "INVTYPE_HEAD"
+  w.classIDs[named], w.subclassIDs[named] = 4, 1
+  w.levels[named] = 600
+  w.frame.onEvent(nil, "GET_ITEM_INFO_RECEIVED", 12601, true)
+  check("vault patch names the pick", #w.printed == 2
+    and w.printed[2]:find("vault update:", 1, true) ~= nil
+    and w.printed[2]:find("[Vault Helm]", 1, true) ~= nil)
+end
+
 print("tests/run.lua: " .. passed .. " checks passed")

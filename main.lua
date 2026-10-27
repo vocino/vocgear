@@ -370,7 +370,7 @@ end
 -- scan, safeguards, and announcements downstream need no changes.
 function ns.evaluateBuiltin(link)
   local _, _, _, equipLoc = C_Item.GetItemInfoInstant(link)
-  if not equipLoc or equipLoc == "" then return { upgrade = false } end
+  if not equipLoc or equipLoc == "" then return nil end -- uncached (vault links land here): unsure, not "not an upgrade"
   local armorOK = ns.armorBestBuiltin(link)
   if armorOK == nil then return nil end
   if not armorOK then return { upgrade = false } end
@@ -912,6 +912,41 @@ end
 -- Print the vault recommendation. Top pick first with its reason, then
 -- the rest briefly. Always available on demand; the event path calls it
 -- once per claimable set (see maybeVaultRecommend).
+--
+-- Vault hyperlinks arrive nameless ("[]" in chat) until the item cache
+-- fills, so an empty display name means the row is a placeholder even
+-- when a verdict already exists.
+function ns.linkDisplayEmpty(link)
+  if type(link) ~= "string" then return true end
+  return link:match("%|h%[(.-)%]%|h") == ""
+end
+
+-- Fresh vault hyperlink for a stale (nameless) one, matched by base
+-- itemID. The stored string is immutable, so the patch re-reads the
+-- vault or the row would stay "[]" forever.
+function ns.refreshVaultLink(link)
+  local id = ns.baseItemID(link)
+  if type(id) ~= "number" then return link end
+  local links = ns.vaultLinks()
+  if not links then return link end
+  for _, fresh in ipairs(links) do
+    if ns.baseItemID(fresh) == id and not ns.linkDisplayEmpty(fresh) then
+      return fresh
+    end
+  end
+  return link
+end
+
+-- Readable label for a vault row that may still be nameless: the link
+-- itself once named, else "item:<id>" so three pending pieces don't all
+-- print as identical "[]".
+function ns.vaultLabel(link)
+  if not ns.linkDisplayEmpty(link) then return link end
+  local id = ns.baseItemID(link)
+  if type(id) == "number" then return "item:" .. tostring(id) end
+  return link
+end
+
 function ns.vaultSay()
   local recs = ns.vaultRecommend()
   if not recs then
@@ -921,12 +956,12 @@ function ns.vaultSay()
   for i, pick in ipairs(recs) do
     local head = (i == 1) and "vault pick: " or "  "
     local line
-    if pick.ev then
+    if pick.ev and not ns.linkDisplayEmpty(pick.link) then
       line = head .. pick.link .. " (" .. ns.vaultVerdict(pick) .. ")"
     else
       -- Placeholder now, patched when GET_ITEM_INFO_RECEIVED lands.
       ns.notePending(pick.link, "vault")
-      line = head .. pick.link .. " (waiting on item data)"
+      line = head .. ns.vaultLabel(pick.link) .. " (waiting on item data)"
     end
     if i == 1 then ns.say(line) else print(line) end
   end
@@ -1258,11 +1293,17 @@ function ns.patchPending(itemID, success)
   ns.pendingInfo[itemID] = nil
   if success == false then return end
   for _, entry in ipairs(waiting) do
-    local okEv, ev = pcall(ns.evaluate, entry.link)
+    local link = entry.link
+    if entry.kind == "vault" then link = ns.refreshVaultLink(link) end
+    local okEv, ev = pcall(ns.evaluate, link)
     if okEv and ev ~= nil then
-      ns.patchLine(entry.kind, entry.link, ev)
+      if entry.kind == "vault" and ns.linkDisplayEmpty(link) then
+        ns.notePending(link, entry.kind) -- still nameless: wait for the name
+      else
+        ns.patchLine(entry.kind, link, ev)
+      end
     else
-      ns.notePending(entry.link, entry.kind)
+      ns.notePending(link, entry.kind)
     end
   end
 end
