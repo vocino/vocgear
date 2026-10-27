@@ -32,3 +32,20 @@ jobs:
         run: |
           git clone --depth 1 https://github.com/vocino/voc-addons.git /tmp/voc-addons
           bash /tmp/voc-addons/checks/run-all.sh .
+
+  authorship:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: reject commits outside the authorship allowlist
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            bash hooks/check-authors.sh "${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}"
+          elif [ "${{ github.event.before }}" = "0000000000000000000000000000000000000000" ]; then
+            bash hooks/check-authors.sh "${{ github.sha }}"
+          else
+            bash hooks/check-authors.sh "${{ github.event.before }}..${{ github.sha }}"
+          fi

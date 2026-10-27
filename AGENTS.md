@@ -67,6 +67,15 @@ binary ships with the VS Code extension, or download it from the
 wowlua-ls releases.
 Tests are excluded from the packaged addon (see `.pkgmeta`).
 
+## Authorship
+
+Every commit is `vocino <65593+vocino@users.noreply.github.com>`,
+author and committer, with no foreign trailers. A pre-push hook (`hooks/`, enabled per clone
+with `git config core.hooksPath hooks`) and a CI job enforce it, so
+a wrong identity blocks the push instead of rewriting history later.
+Fix a flagged commit with `--author` before pushing, never by
+rewriting public history.
+
 ## Releases
 
 Follow `VERSIONING.md` when cutting a release; never retag.

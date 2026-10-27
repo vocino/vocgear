@@ -1,0 +1,34 @@
+#!/bin/sh
+# Pre-push guard: refuse to push commits outside the authorship
+# allowlist (see check-authors.sh). Tags carry no new commits and
+# deletions remove history, so neither is checked.
+set -u
+
+hook_dir=$(dirname "$0")
+zero='0000000000000000000000000000000000000000'
+fail=0
+
+while IFS= read -r line; do
+  # Strip carriage returns: a CRLF-wrapped git (or harness) must not
+  # turn a zero SHA into a near-miss.
+  clean=$(printf '%s' "$line" | tr -d '\r')
+  # shellcheck disable=SC2086
+  set -- $clean
+  local_ref=$1 local_sha=$2 remote_sha=$4
+  case "$local_ref" in
+    refs/heads/*) ;;
+    *) continue ;; # tags and other refs: nothing to check
+  esac
+  if [ "$local_sha" = "$zero" ]; then
+    continue # deleting a branch removes history; nothing to check
+  fi
+  if [ "$remote_sha" = "$zero" ]; then
+    # New branch: only commits no ref has yet.
+    set -- "$local_sha" --not --all
+  else
+    set -- "$remote_sha..$local_sha"
+  fi
+  sh "$hook_dir/check-authors.sh" "$@" || fail=1
+done
+
+exit $fail
