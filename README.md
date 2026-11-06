@@ -76,7 +76,13 @@ dagger, gun to bow) and across hands (one-hand plus off-hand to
 staff, decided by item level: neither Pawn nor item level can score a
 pair against a single weapon, so the higher level wins). Turn it off
 and VocGear keeps your current weapon types and only announces the
-rest. Weapons your class cannot use never equip. Weapon swaps that
+rest. Weapons your class cannot use never equip, and neither does gear
+with an unmet requirement in its tooltip (an untrained armor or weapon
+type, a class or reputation line): the Forever client gates those on
+trained skills, so the tooltip's red lines decide. If the client still
+refuses an equip, VocGear says so once, with the client's reason, and
+leaves that item alone until you learn a skill, level up, or run
+`/vg scan`. Weapon swaps that
 cross the melee/ranged line (a sword for a
 hunter's bow) are announced, never auto-equipped. A Unique-Equipped ring or
 trinket whose twin is already worn is announced instead of equipped.

@@ -153,6 +153,106 @@ function ns.unusable(link)
   if not ok then return false end
   return equippable == false
 end
+-- Proficiency gate. Classic-rules clients (Forever) gate armor and
+-- weapon types on trained skills, plus class, race, and reputation
+-- lines, and none of that reaches the item APIs: IsEquippableItem above
+-- is slot-only, and Pawn's CanEquip needs Pawn, which Forever lacks. So
+-- a young warrior's plate, a rogue's untrained mace, or a priest's sword
+-- all read as upgrades, the client refuses each equip, and every bag
+-- event retried the same item. The client does say so, in the tooltip:
+-- an unmet requirement (the armor or weapon type line, "Classes:", a
+-- reputation line) is drawn in RED_FONT_COLOR, in every locale. The gate
+-- reads those lines through C_TooltipInfo (modern engine, both clients),
+-- else a hidden scanning GameTooltip, skipping the name line (quality
+-- colored). Verdicts are cached per link and dropped when a skill is
+-- learned, on level-up, and on a manual scan (ns.clearProficiency).
+-- Unknown (no tooltip API, no lines yet, odd data) fails open like the
+-- other gates: refused-equip detection (ns.markRefused) is the backstop.
+ns.profCache = {} -- link -> true (blocked) | false (clear), per session
+ns.scanTipName = "VocGearScanTooltip"
+function ns.isRedText(r, g, b)
+  if type(r) ~= "number" or type(g) ~= "number" or type(b) ~= "number" then return false end
+  return r > 0.9 and g < 0.3 and b < 0.3
+end
+-- Tooltip lines for a link as { { text, r, g, b }, ... }, or nil when no
+-- tooltip source is available or the item has no lines yet.
+function ns.tooltipLines(link)
+  if type(C_TooltipInfo) == "table" and type(C_TooltipInfo.GetHyperlink) == "function" then
+    local ok, data = pcall(C_TooltipInfo.GetHyperlink, link)
+    if not ok or type(data) ~= "table" or type(data.lines) ~= "table" then return nil end
+    local lines = {}
+    for _, line in ipairs(data.lines) do
+      if type(line) == "table" then
+        -- 10.0.2 shipped args to be surfaced; 10.1+ carries the fields.
+        if line.leftText == nil and type(TooltipUtil) == "table"
+            and type(TooltipUtil.SurfaceArgs) == "function" then
+          pcall(TooltipUtil.SurfaceArgs, line)
+        end
+        local color = line.leftColor
+        local r, g, b
+        if type(color) == "table" then
+          if type(color.GetRGB) == "function" then
+            local okRGB, cr, cg, cb = pcall(color.GetRGB, color)
+            if okRGB then r, g, b = cr, cg, cb end
+          else
+            r, g, b = color.r, color.g, color.b
+          end
+        end
+        lines[#lines + 1] = { text = line.leftText, r = r, g = g, b = b }
+      end
+    end
+    return lines
+  end
+  if type(CreateFrame) ~= "function" then return nil end
+  local tip = ns.scanTip
+  if not tip then
+    local okCreate, created = pcall(CreateFrame, "GameTooltip", ns.scanTipName, nil, "GameTooltipTemplate")
+    if not okCreate or type(created) ~= "table" then return nil end
+    tip = created
+    ns.scanTip = tip
+  end
+  if type(tip.SetOwner) ~= "function" or type(tip.SetHyperlink) ~= "function" then return nil end
+  pcall(tip.SetOwner, tip, UIParent or tip, "ANCHOR_NONE")
+  pcall(tip.ClearLines, tip)
+  local okSet = pcall(tip.SetHyperlink, tip, link)
+  if not okSet then return nil end
+  local lines = {}
+  local n = type(tip.NumLines) == "function" and tip:NumLines() or 0
+  for i = 1, n do
+    local fs = _G[ns.scanTipName .. "TextLeft" .. i]
+    if type(fs) == "table" and type(fs.GetText) == "function" then
+      local r, g, b
+      if type(fs.GetTextColor) == "function" then r, g, b = fs:GetTextColor() end
+      lines[#lines + 1] = { text = fs:GetText(), r = r, g = g, b = b }
+    end
+  end
+  return lines
+end
+-- True when the tooltip shows an unmet requirement; false when it is
+-- clean; nil when no verdict is possible (fail open at the caller).
+function ns.proficiencyBlocked(link)
+  if not link then return nil end
+  local cached = ns.profCache[link]
+  if cached ~= nil then return cached end
+  local lines = ns.tooltipLines(link)
+  if type(lines) ~= "table" or #lines < 2 then return nil end
+  local blocked = false
+  for i = 2, #lines do -- line 1 is the name, colored by quality
+    local line = lines[i]
+    if type(line.text) == "string" and line.text ~= "" and ns.isRedText(line.r, line.g, line.b) then
+      blocked = true
+      break
+    end
+  end
+  ns.profCache[link] = blocked
+  return blocked
+end
+-- Forget tooltip verdicts and refused equips: a learned skill, a
+-- level-up, or a manual scan may have changed the answer.
+function ns.clearProficiency()
+  ns.profCache = {}
+  ns.refused = {}
+end
 -- Poor (grey) items are vendor trash: no stats worth wearing, so they
 -- never displace worn gear on any path. An empty slot takes anything,
 -- though -- even trash -- so the evaluate gate below grants a confirmed
@@ -245,6 +345,11 @@ function ns.evaluate(link)
     return { upgrade = false }
   end
   if ns.unusable(link) or ns.shieldBlocked(link) then
+    return { upgrade = false }
+  end
+  -- Unmet requirement in the tooltip (untrained armor or weapon type,
+  -- class, reputation): the client would refuse the equip.
+  if ns.proficiencyBlocked(link) then
     return { upgrade = false }
   end
   if rarity == ns.POOR_RARITY then
@@ -1178,6 +1283,8 @@ function ns.equip(link, ev, slotID)
     return false
   end
   ns.ourEquipPending = true
+  ns.ourEquipLink = link
+  ns.ourEquipSlot = checkSlot
   if slotID then C_Item.EquipItemByName(link, slotID) else C_Item.EquipItemByName(link) end
   ns.playEquipSound()
   if o.announce then ns.say("equipped " .. link .. ns.why(ev)) end
@@ -1213,6 +1320,14 @@ function ns.whyNot(link, ev)
   if rarity == ns.POOR_RARITY and not ns.emptyHome(link) then
     reasons[#reasons + 1] = "grey, slot occupied"
   end
+  if ns.proficiencyBlocked(link) then
+    reasons[#reasons + 1] = "unmet requirement in tooltip (proficiency, class, or reputation)"
+  end
+  local refusal = ns.refused[link]
+  if refusal then
+    reasons[#reasons + 1] = "client refused the equip this session"
+      .. (type(refusal) == "string" and (": " .. refusal) or "")
+  end
   if #reasons == 0 then
     if ev == nil then
       reasons[#reasons + 1] = "waiting on item data"
@@ -1245,7 +1360,7 @@ function ns.whySay()
           -- Placeholder now, patched when GET_ITEM_INFO_RECEIVED lands.
           ns.notePending(link, "why")
           ns.say(link .. ": waiting on item data")
-        elseif ev.upgrade then
+        elseif ev.upgrade and not ns.refused[link] then
           ns.say(link .. ": upgrade" .. ns.why(ev))
         else
           ns.say(link .. ": not equipping (" .. ns.whyNot(link, ev) .. ")")
@@ -1343,6 +1458,39 @@ ns.recentSwap = {} -- link -> timestamp when it was displaced
 ns.slotTouches = {} -- slotID -> timestamps of OUR equips
 ns.pausedUntil = nil
 ns.ourEquipPending = false
+ns.ourEquipLink = nil -- the link our in-flight equip asked for
+ns.ourEquipSlot = nil -- the slot it should land in (nil = unknown)
+
+-- Refused equips. The client answers an equip it will not do (untrained
+-- type, class line, a cancelled bind confirm) with an error and leaves
+-- the bags and slots untouched, so nothing above ever noticed: no slot
+-- changed, so the loop guard never tripped, and every bag event picked
+-- the same item again. Two detectors feed one table. UI_ERROR_MESSAGE
+-- while our equip is in flight carries the client's own reason; and the
+-- next scan's snapshot (ns.trackSwaps) catches a silent no-op when the
+-- target slot did not change. A refused link is announced once and left
+-- alone until ns.clearProficiency (a learned skill, a level-up, /vg scan).
+ns.refused = {} -- link -> reason string | true, per session
+function ns.markRefused(link, reason)
+  if not link or ns.refused[link] then return end
+  ns.refused[link] = reason or true
+  ns.ourEquipPending = false
+  ns.ourEquipLink = nil
+  ns.ourEquipSlot = nil
+  if ns.opts().announce then
+    ns.flagged[link] = true
+    local why = type(reason) == "string" and reason ~= "" and (": " .. reason) or ""
+    ns.say("the client refused to equip " .. link .. why .. " (leaving it alone; /vg scan retries)")
+  end
+end
+
+-- UI_ERROR_MESSAGE (errorType, message) during our equip: the client
+-- refused it. Only attributed while an equip of ours is in flight, so
+-- unrelated errors never park an item.
+function ns.onUIError(_, message)
+  if not ns.ourEquipPending or not ns.ourEquipLink then return end
+  ns.markRefused(ns.ourEquipLink, type(message) == "string" and message or nil)
+end
 
 function ns.snapshotEquipped()
   local snap = {}
@@ -1376,14 +1524,33 @@ function ns.trackSwaps()
   local now = GetTime()
   local snap = ns.snapshotEquipped()
   if ns.equippedSnap then
+    local changed = false
     for slotID = 1, 19 do
       local prev, cur = ns.equippedSnap[slotID], snap[slotID]
-      if cur ~= prev then ns.noteDisplacement(prev, cur, slotID, now) end
+      if cur ~= prev then
+        changed = true
+        ns.noteDisplacement(prev, cur, slotID, now)
+      end
     end
     ns.trackSetCrossings(ns.equippedSnap, snap)
+    -- Silent refusal: our equip was in flight and its slot (or, slot
+    -- unknown, every slot) still holds what it held. Equips resolve
+    -- before the next event, so an unchanged slot means no equip.
+    if ns.ourEquipPending and ns.ourEquipLink then
+      local slotID = ns.ourEquipSlot
+      local landed
+      if slotID then
+        landed = snap[slotID] ~= ns.equippedSnap[slotID]
+      else
+        landed = changed
+      end
+      if not landed then ns.markRefused(ns.ourEquipLink, nil) end
+    end
   end
   ns.equippedSnap = snap
   ns.ourEquipPending = false
+  ns.ourEquipLink = nil
+  ns.ourEquipSlot = nil
   for link, t in pairs(ns.recentSwap) do
     if now - t >= ns.SWAP_COOLDOWN then ns.recentSwap[link] = nil end
   end
@@ -1511,6 +1678,7 @@ end
 function ns.checkNow()
   ns.unsureStreak = 0 -- a manual look re-arms quieted retries
   ns.flagged = {}
+  ns.clearProficiency() -- refused and tooltip-gated items get another look
   ns.scan()
 end
 
@@ -1521,7 +1689,14 @@ end
 function ns.scan()
   local ok, err = pcall(ns.scanInner)
   ns.scanning = false
-  if not ok then error(err, 0) end
+  if not ok then
+    -- A throw mid-equip says nothing about the client's verdict, so no
+    -- refusal is attributed: the next scan simply tries again.
+    ns.ourEquipPending = false
+    ns.ourEquipLink = nil
+    ns.ourEquipSlot = nil
+    error(err, 0)
+  end
 end
 
 function ns.scanInner()
@@ -1552,8 +1727,9 @@ function ns.scanInner()
         local okEv, ev = pcall(ns.evaluate, link)
         if not okEv or ev == nil then
           unsure = true
-        -- Freshly displaced gear is left alone (loop guard), silently.
-        elseif not ns.recentSwap[link] then
+        -- Freshly displaced gear is left alone (loop guard), silently;
+        -- so is anything the client already refused this session.
+        elseif not ns.recentSwap[link] and not ns.refused[link] then
           -- Set completion can act on items Pawn doesn't flag; anything
           -- else needs a Pawn verdict to proceed.
           local readyThreshold, readySet = ns.setCompletionReady(setCtx, link)
@@ -1977,10 +2153,23 @@ ns.frame:RegisterEvent("PLAYER_SPECIALIZATION_CHANGED")
 ns.frame:RegisterEvent("WEEKLY_REWARDS_UPDATE")
 -- Item data for placeholder rows (see ns.pendingInfo).
 ns.frame:RegisterEvent("GET_ITEM_INFO_RECEIVED")
+-- The client's answer to an equip it will not do (see ns.markRefused).
+ns.frame:RegisterEvent("UI_ERROR_MESSAGE")
+-- A newly trained armor or weapon skill (classic rule) may clear a
+-- tooltip veto or a refusal, so both forget and rescan. Registration is
+-- guarded: a client without the event must not error at load.
+ns.hasSkillEvent = pcall(ns.frame.RegisterEvent, ns.frame, "SKILL_LINES_CHANGED")
 ns.frame:SetScript("OnEvent", function(_, event, arg1, arg2)
   if event == "WEEKLY_REWARDS_UPDATE" then
     ns.maybeVaultRecommend()
     return
+  end
+  if event == "UI_ERROR_MESSAGE" then
+    ns.onUIError(arg1, arg2)
+    return
+  end
+  if event == "SKILL_LINES_CHANGED" or event == "PLAYER_LEVEL_UP" then
+    ns.clearProficiency()
   end
   if event == "GET_ITEM_INFO_RECEIVED" then
     ns.patchPending(arg1, arg2)

@@ -26,6 +26,7 @@ read_globals = {
   "_G",
   "C_AddOns", "C_Container", "C_Item", "C_PaperDollInfo", "C_PetBattles", "C_SpecializationInfo", "C_Timer",
   "C_WeeklyRewards",
+  "C_TooltipInfo", "TooltipUtil", "UIParent", -- proficiency gate (ns.tooltipLines), presence-gated
   "CreateFrame", "GameTooltip", "GetAverageItemLevel", "GetInventoryItemLink",
   "GetTime", "InCombatLockdown", "NUM_BAG_SLOTS", "PaperDollFrame", "PaperDollFrame_SetItemLevel",
   "Enum",

@@ -82,6 +82,15 @@ local function loadAddon(world)
     INVTYPE_RANGEDRIGHT = world.rangedSlot or 16 }
   local equipStub = function(item, slot)
     world.equipped[#world.equipped + 1] = { item = item, slot = slot }
+    -- A refused equip (untrained type, class line): the client changes
+    -- nothing and, when it has a message, says so through UI_ERROR_MESSAGE.
+    local refusal = world.refuses and world.refuses[item]
+    if refusal then
+      if type(refusal) == "string" and world.frame then
+        world.frame.onEvent(nil, "UI_ERROR_MESSAGE", 1, refusal)
+      end
+      return
+    end
     -- Like the real client, the equipped item leaves the bags.
     for _, b in pairs(world.bags) do
       for i = #b, 1, -1 do
@@ -100,6 +109,22 @@ local function loadAddon(world)
     end
   end
   g.C_Item.EquipItemByName = equipStub -- C_Item.EquipItemByName, ItemDocumentation
+  -- Tooltip source for the proficiency gate: world.tooltips[link] is a
+  -- list of { text, r, g, b } lines (line 1 = name). Absent table = no
+  -- tooltip API on this client (the gate fails open).
+  if world.tooltips then
+    g.C_TooltipInfo = {
+      GetHyperlink = function(link)
+        local rows = world.tooltips[link]
+        if not rows then return nil end
+        local lines = {}
+        for _, row in ipairs(rows) do
+          lines[#lines + 1] = { leftText = row[1], leftColor = { r = row[2], g = row[3], b = row[4] } }
+        end
+        return { lines = lines }
+      end,
+    }
+  end
   g.GetInventoryItemLink = function(_, slot) return world.equippedSlots[slot] end
   g.C_Timer = {
     After = function(_, fn) world.timers[#world.timers + 1] = fn end,
@@ -3836,6 +3861,180 @@ do
   check("vault patch names the pick", #w.printed == 2
     and w.printed[2]:find("vault update:", 1, true) ~= nil
     and w.printed[2]:find("[Vault Helm]", 1, true) ~= nil)
+end
+
+-- Proficiency gate (Forever client, classic rules): an unmet requirement
+-- line drawn red in the tooltip means the client would refuse the
+-- equip, so the item is never an upgrade.
+local RED, WHITE = { 1, 0.125, 0.125 }, { 1, 1, 1 }
+local function plateChest(w, lines)
+  local chest = "|cff1eff00|Hitem:2865|h[Plate Chest]|h|r"
+  w.pawn = false
+  w.playerLevel = 10
+  w.playerClass = "WARRIOR"
+  w.levels[chest] = 20
+  w.bags[0] = { chest }
+  w.slots[chest] = "INVTYPE_CHEST"
+  w.classIDs[chest], w.subclassIDs[chest] = 4, 4 -- plate: class best, untrained below 40
+  w.tooltips = { [chest] = lines }
+  return chest
+end
+do -- red type line: blocked, explained
+  local w = newWorld()
+  local chest = plateChest(w, { { "Plate Chest", 0.12, 1, 0 }, { "Chest", 1, 1, 1 }, { "Plate", RED[1], RED[2], RED[3] } })
+  local ns = loadAddon(w)
+  ns.scan()
+  check("proficiency: red type line blocks the equip", #w.equipped == 0)
+  check("proficiency: nothing announced for a blocked item", #w.printed == 0)
+  local ev = ns.evaluate(chest)
+  check("proficiency: evaluate reads no upgrade", ev and ev.upgrade == false)
+  check("proficiency: why names the requirement",
+    ns.whyNot(chest, ev):find("unmet requirement", 1, true) ~= nil)
+end
+do -- white type line: clean, equips
+  local w = newWorld()
+  local chest = plateChest(w, { { "Plate Chest", 0.12, 1, 0 }, { "Chest", 1, 1, 1 }, { "Plate", WHITE[1], WHITE[2], WHITE[3] } })
+  local ns = loadAddon(w)
+  ns.scan()
+  check("proficiency: white tooltip equips", #w.equipped == 1 and w.equipped[1].item == chest)
+end
+do -- red name line only (a quality color) never blocks
+  local w = newWorld()
+  plateChest(w, { { "Plate Chest", 1, 0.1, 0.1 }, { "Chest", 1, 1, 1 }, { "Plate", 1, 1, 1 } })
+  local ns = loadAddon(w)
+  ns.scan()
+  check("proficiency: name line is skipped", #w.equipped == 1)
+end
+do -- no tooltip API: fails open
+  local w = newWorld()
+  plateChest(w, nil)
+  w.tooltips = nil
+  local ns = loadAddon(w)
+  ns.scan()
+  check("proficiency: no tooltip API fails open", #w.equipped == 1)
+end
+do -- empty tooltip (uncached): fails open, no verdict cached
+  local w = newWorld()
+  local chest = plateChest(w, {})
+  local ns = loadAddon(w)
+  check("proficiency: empty tooltip is unsure", ns.proficiencyBlocked(chest) == nil)
+  check("proficiency: unsure is not cached", ns.profCache[chest] == nil)
+end
+do -- verdict is cached until a skill is learned
+  local w = newWorld()
+  local chest = plateChest(w, { { "Plate Chest", 0.12, 1, 0 }, { "Plate", RED[1], RED[2], RED[3] } })
+  local ns = loadAddon(w)
+  ns.scan()
+  check("proficiency: blocked before training", #w.equipped == 0)
+  w.tooltips[chest] = { { "Plate Chest", 0.12, 1, 0 }, { "Plate", WHITE[1], WHITE[2], WHITE[3] } }
+  ns.scan()
+  check("proficiency: cached verdict holds within a session", #w.equipped == 0)
+  w.frame.onEvent(nil, "SKILL_LINES_CHANGED")
+  check("proficiency: SKILL_LINES_CHANGED forgets and rescans", #w.equipped == 1)
+end
+do -- level-up and a manual scan forget too
+  local w = newWorld()
+  local chest = plateChest(w, { { "Plate Chest", 0.12, 1, 0 }, { "Plate", RED[1], RED[2], RED[3] } })
+  local ns = loadAddon(w)
+  ns.scan()
+  w.tooltips[chest] = { { "Plate Chest", 0.12, 1, 0 }, { "Plate", WHITE[1], WHITE[2], WHITE[3] } }
+  w.frame.onEvent(nil, "PLAYER_LEVEL_UP", 11)
+  check("proficiency: level-up forgets the verdict", #w.equipped == 1)
+  local w2 = newWorld()
+  local chest2 = plateChest(w2, { { "Plate Chest", 0.12, 1, 0 }, { "Plate", RED[1], RED[2], RED[3] } })
+  local ns2 = loadAddon(w2)
+  ns2.scan()
+  w2.tooltips[chest2] = { { "Plate Chest", 0.12, 1, 0 }, { "Plate", WHITE[1], WHITE[2], WHITE[3] } }
+  ns2.checkNow()
+  check("proficiency: /vg scan forgets the verdict", #w2.equipped == 1)
+end
+
+-- Refused equips: the client declines (no bag or slot change) and the
+-- item must not be retried on every bag event.
+local function untrainedMace(w)
+  local mace = "|cff1eff00|Hitem:2024|h[Heavy Mace]|h|r"
+  w.pawn = false
+  w.playerClass = "ROGUE"
+  w.levels[mace] = 30
+  w.bags[0] = { mace }
+  w.slots[mace] = "INVTYPE_WEAPON"
+  w.classIDs[mace], w.subclassIDs[mace] = 2, 4
+  return mace
+end
+do -- refusal with a client error message: once, with the reason
+  local w = newWorld()
+  local mace = untrainedMace(w)
+  w.refuses = { [mace] = "You do not have the required proficiency for that item." }
+  local ns = loadAddon(w)
+  ns.scan()
+  check("refusal: one attempt", #w.equipped == 1)
+  local refusedLine
+  for _, line in ipairs(w.printed) do
+    if line:find("refused to equip", 1, true) then refusedLine = line end
+  end
+  check("refusal: announced with the client's reason", refusedLine ~= nil
+    and refusedLine:find("required proficiency", 1, true) ~= nil)
+  check("refusal: link is parked", ns.refused[mace] ~= nil)
+  local before = #w.printed
+  w.frame.onEvent(nil, "BAG_UPDATE_DELAYED")
+  w.frame.onEvent(nil, "BAG_UPDATE_DELAYED")
+  check("refusal: no retry on later bag events", #w.equipped == 1)
+  check("refusal: no repeat announcements", #w.printed == before)
+  local ev = ns.evaluate(mace)
+  check("refusal: why explains the parked item",
+    ns.whyNot(mace, ev):find("client refused", 1, true) ~= nil)
+  ns.checkNow()
+  check("refusal: /vg scan retries once", #w.equipped == 2)
+end
+do -- silent refusal (no error event): caught by the next scan's snapshot
+  local w = newWorld()
+  local mace = untrainedMace(w)
+  w.equippedSlots[16] = "|cffffffff|Hitem:25|h[Worn Shortsword]|h|r"
+  w.levels[w.equippedSlots[16]] = 2
+  w.refuses = { [mace] = true }
+  local ns = loadAddon(w)
+  ns.scan()
+  check("silent refusal: first scan attempts", #w.equipped == 1)
+  check("silent refusal: not yet known", ns.refused[mace] == nil)
+  ns.scan()
+  check("silent refusal: second scan parks it, no retry", #w.equipped == 1 and ns.refused[mace] ~= nil)
+  local said = 0
+  for _, line in ipairs(w.printed) do
+    if line:find("refused to equip", 1, true) then said = said + 1 end
+  end
+  check("silent refusal: announced once", said == 1)
+  ns.scan()
+  ns.scan()
+  check("silent refusal: stays parked", #w.equipped == 1)
+end
+do -- a successful equip is never mistaken for a refusal
+  local w = newWorld()
+  untrainedMace(w)
+  local ns = loadAddon(w)
+  ns.scan()
+  ns.scan()
+  check("refusal: success is not parked", next(ns.refused) == nil and #w.equipped == 1)
+end
+do -- an error with no equip in flight parks nothing
+  local w = newWorld()
+  local mace = untrainedMace(w)
+  local ns = loadAddon(w)
+  w.frame.onEvent(nil, "UI_ERROR_MESSAGE", 1, "You are too far away.")
+  check("refusal: stray errors are ignored", next(ns.refused) == nil and #w.printed == 0)
+  ns.scan()
+  check("refusal: stray error did not block the equip", #w.equipped == 1 and w.equipped[1].item == mace)
+end
+do -- /vg why lists a refused item as not equipping
+  local w = newWorld()
+  local mace = untrainedMace(w)
+  w.refuses = { [mace] = "You do not have the required proficiency for that item." }
+  local ns = loadAddon(w)
+  ns.scan()
+  w.printed = {}
+  ns.whySay()
+  check("refusal: why lists it as not equipping", #w.printed == 1
+    and w.printed[1]:find("not equipping", 1, true) ~= nil
+    and w.printed[1]:find("client refused", 1, true) ~= nil)
 end
 
 print("tests/run.lua: " .. passed .. " checks passed")
