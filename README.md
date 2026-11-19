@@ -1,5 +1,7 @@
 # VocGear
 
+I make these addons for myself. You might find them useful too.
+
 Pawn tells you what's an upgrade but won't act on it. VocGear is the
 muscle: when an upgrade lands in your bags, it equips it, out of
 combat, and prints the margin. With
